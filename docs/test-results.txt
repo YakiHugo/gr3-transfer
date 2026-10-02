@@ -1,0 +1,79 @@
+
+> gr3-transfer-prototype@0.1.0 check
+> node --check src/server.js && node --check src/camera.js && node --check src/jpeg.js && node --check public/app.js && npm test
+
+
+> gr3-transfer-prototype@0.1.0 test
+> node --test tests/*.test.js
+
+✔ audit: model identity is exact and sensitive /props fields never escape (2.226399ms)
+✔ audit: listing rejects traversal JPEG paths and never includes RAW/video (0.773761ms)
+✔ audit: fixed camera address, GET only, no redirect and original has no resize query (6.687711ms)
+✔ audit: adapter rejects non-allowlisted camera endpoints before fetch (0.890156ms)
+✔ audit: unsafe photo paths and invalid variants never call camera fetch (0.340501ms)
+✔ audit: malformed camera JSON, non-object payload, and reported errors are safely rejected (2.356275ms)
+✔ audit: encoded camera bytes and redirect/network errors fail closed (0.462894ms)
+✔ audit: queued reads are serialized and cancelled queued work never starts (0.349334ms)
+✔ audit: loopback, Host, Origin, fetch-site, CSRF and methods enforced (36.287412ms)
+✔ audit: invalid connect input does not contact camera or change disconnected state (9.159159ms)
+✔ audit: demo original is byte-for-byte unchanged and never uses camera (19.070556ms)
+✔ audit: camera original preserves every byte through oddly split chunks (5.848432ms)
+✔ audit: reconnect/disconnect invalidate old gallery download URLs (8.305579ms)
+✔ audit: cancelled old connection cannot overwrite a newer demo session (3.675824ms)
+✔ audit: late refresh cannot resurrect photos after disconnect (4.108272ms)
+✔ audit: invalid MIME, declared lengths and missing EOI cannot complete downloads (18.784468ms)
+✔ audit: truncated JPEG with an EOI-shaped sequence only inside APP metadata is rejected (3.071217ms)
+✔ audit: SOI/EOI signature alone is not a valid original JPEG (2.888103ms)
+✔ audit: wrong camera model stops before requesting its photo list (0.397045ms)
+✔ audit: camera JSON response and photo count limits are enforced (107.431621ms)
+✔ audit: real adapter props fields are filtered before local API response (5.174151ms)
+✔ audit: aborting a pending fetch cancels it and releases camera queue (0.806019ms)
+✔ audit: upstream response body failure cannot complete an original download (3.587421ms)
+✔ audit: disconnect aborts outstanding download signal without making further camera requests (3.471248ms)
+✔ audit: marker parser accepts every synthetic original, preview and thumbnail across arbitrary chunk boundaries (108.510519ms)
+✔ audit: embedded EOI in an APP segment is skipped while actual outer EOI is required (5.363275ms)
+✔ audit: marker-level entropy handling accepts stuffing/restarts across chunk boundaries (2.21306ms)
+✔ audit: marker parser rejects zero or inconsistent SOF component counts (0.307962ms)
+✔ audit: marker parser rejects zero or inconsistent SOS component counts (0.303004ms)
+✔ audit: closing a local download aborts its camera read (4.304366ms)
+✔ audit: cancellation while reading camera JSON is reported as cancellation (0.556885ms)
+✔ audit: camera request timeout aborts fetch and releases the queue (15.157827ms)
+✔ photo listing accepts published schema and keeps JPEGs only, with deterministic IDs (7.618828ms)
+✔ unfamiliar listing shapes and unsafe paths fail closed (0.740341ms)
+✔ model matching accepts only exact normalized GR III and strictly projects sensitive properties (0.366029ms)
+✔ starts disconnected and never calls camera until explicitly connected (30.47278ms)
+✔ demo has 12 unmistakably synthetic images and exact original bytes including EXIF (23.784728ms)
+✔ camera connection uses only fixed read-only endpoint allowlist and omits size for originals (17.569426ms)
+✔ wrong model and camera-level JSON errors do not create connected sessions or leak raw errors (18.24602ms)
+✔ refresh returns latest list and disconnect makes old URLs unusable (13.454032ms)
+✔ same-origin / localhost / CSRF protection blocks third-party requests and rebinding (17.958247ms)
+✔ JPEG payload ending early never completes successfully (12.264748ms)
+✔ HTML masquerading as JPEG is rejected before successful body (9.575904ms)
+✔ camera request failures produce safe actionable errors (0.576094ms)
+✔ encoded camera responses cannot silently transform original bytes (0.461792ms)
+✔ camera read queue serializes and skips cancelled pending requests (0.193861ms)
+✔ new connection wins over an older pending camera handshake (29.015414ms)
+✔ DOM: disconnected landing does not request camera or expose synthetic state as connected (68.92479ms)
+✔ DOM: demo gallery, folder/search filters, sorting, empty/reset and selection work (66.959863ms)
+✔ DOM: preview uses preview derivative, supports repeated close/reopen and selection (43.10587ms)
+✔ DOM: original transfer creates unchanged Blob and save only reports browser handoff (55.240483ms)
+✔ DOM: sequential selected downloads, repeat-click deduplication and clear release all Blobs (79.22519ms)
+✔ DOM: failed download is retryable and does not produce a saveable Blob (45.781283ms)
+✔ DOM: interrupted reader cannot be saved; manual retries stop after three attempts (50.675064ms)
+✔ DOM: cancel aborts active stream and queued files without starting the next download (40.052379ms)
+✔ DOM: declared size mismatch and oversized JPEG fail before Save (88.187084ms)
+✔ DOM: failed real-camera connection reconciles demo session and exposes honest error (39.673221ms)
+✔ DOM: large list paginates 24 frames, keeps cross-page selections and displays untrusted text safely (37.756696ms)
+✔ DOM: disconnect and pagehide release retained files; help states phone networking limit (38.898549ms)
+✔ DOM: mobile transfer control selects originals and directs to transfer tray (33.726962ms)
+✔ DOM: unknown real-camera metadata remains explicitly unknown (22.949926ms)
+✔ DOM: Back/Forward restoration clears unusable Blob URLs and reconciles gallery (52.683777ms)
+✔ DOM: late old transfer cannot cancel a new tray after Back/Forward restore (68.716225ms)
+ℹ tests 63
+ℹ suites 0
+ℹ pass 63
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1145.247164

@@ -1,0 +1,122 @@
+[
+  {
+    "id": "41232663d06e8f19609d78e8",
+    "folder": "100RICOH",
+    "name": "R0000001.JPG",
+    "bytes": 51223,
+    "takenAt": "2026-09-28T09:24:00",
+    "width": 1200,
+    "height": 800,
+    "synthetic": true
+  },
+  {
+    "id": "c078b5ed35a22b263ccab756",
+    "folder": "100RICOH",
+    "name": "R0000002.JPG",
+    "bytes": 82877,
+    "takenAt": "2026-09-28T10:24:00",
+    "width": 1200,
+    "height": 800,
+    "synthetic": true
+  },
+  {
+    "id": "520c18e079b7ba542a53cefa",
+    "folder": "100RICOH",
+    "name": "R0000003.JPG",
+    "bytes": 60708,
+    "takenAt": "2026-09-28T11:24:00",
+    "width": 1200,
+    "height": 800,
+    "synthetic": true
+  },
+  {
+    "id": "dd7d80e63eb50585a8f5db49",
+    "folder": "100RICOH",
+    "name": "R0000004.JPG",
+    "bytes": 37658,
+    "takenAt": "2026-09-28T12:24:00",
+    "width": 1200,
+    "height": 800,
+    "synthetic": true
+  },
+  {
+    "id": "4b588b39780aa6cee14df6cb",
+    "folder": "100RICOH",
+    "name": "R0000005.JPG",
+    "bytes": 43092,
+    "takenAt": "2026-09-28T13:24:00",
+    "width": 1200,
+    "height": 800,
+    "synthetic": true
+  },
+  {
+    "id": "1a0ba7c45321076361ef8223",
+    "folder": "100RICOH",
+    "name": "R0000006.JPG",
+    "bytes": 42452,
+    "takenAt": "2026-09-28T14:24:00",
+    "width": 1200,
+    "height": 800,
+    "synthetic": true
+  },
+  {
+    "id": "5c05f9039a3a2a5c2b1df281",
+    "folder": "101RICOH",
+    "name": "R0000007.JPG",
+    "bytes": 45556,
+    "takenAt": "2026-09-29T09:24:00",
+    "width": 1200,
+    "height": 800,
+    "synthetic": true
+  },
+  {
+    "id": "2431de09f5be0352d10d5386",
+    "folder": "101RICOH",
+    "name": "R0000008.JPG",
+    "bytes": 82170,
+    "takenAt": "2026-09-29T10:24:00",
+    "width": 1200,
+    "height": 800,
+    "synthetic": true
+  },
+  {
+    "id": "c310c3e40b4653b602f1f6ba",
+    "folder": "101RICOH",
+    "name": "R0000009.JPG",
+    "bytes": 53475,
+    "takenAt": "2026-09-29T11:24:00",
+    "width": 1200,
+    "height": 800,
+    "synthetic": true
+  },
+  {
+    "id": "6352aee7d6610d1e45f19ba5",
+    "folder": "101RICOH",
+    "name": "R0000010.JPG",
+    "bytes": 37465,
+    "takenAt": "2026-09-29T12:24:00",
+    "width": 1200,
+    "height": 800,
+    "synthetic": true
+  },
+  {
+    "id": "008ddb1b54c44ba679e069b8",
+    "folder": "101RICOH",
+    "name": "R0000011.JPG",
+    "bytes": 40714,
+    "takenAt": "2026-09-29T13:24:00",
+    "width": 1200,
+    "height": 800,
+    "synthetic": true
+  },
+  {
+    "id": "b44abeea8d6520625fa93f58",
+    "folder": "101RICOH",
+    "name": "R0000012.JPG",
+    "bytes": 42434,
+    "takenAt": "2026-09-29T14:24:00",
+    "width": 1200,
+    "height": 800,
+    "synthetic": true
+  }
+]

@@ -1,0 +1,11 @@
+node_modules/
+test-results/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+.cache/
+coverage/
+.agents/
+.codex/

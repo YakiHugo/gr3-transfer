@@ -1,0 +1,20 @@
+{
+  "name": "gr3-transfer-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only, loopback-only Ricoh GR III original JPEG transfer prototype",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test tests/*.test.js",
+    "check": "node --check src/server.js && node --check src/camera.js && node --check src/jpeg.js && node --check public/app.js && npm test",
+    "test:core": "node --test tests/core.test.js tests/audit.test.js",
+    "test:dom": "node --test tests/ui.dom.test.js"
+  },
+  "devDependencies": {
+    "happy-dom": "20.11.1"
+  }
+}
