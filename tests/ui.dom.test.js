@@ -8,6 +8,7 @@ import { createBridge } from '../src/server.js';
 import { AppError } from '../src/camera.js';
 
 const html = (await readFile(new URL('../public/index.html', import.meta.url), 'utf8')).replace(/<script[^>]*>[\s\S]*?<\/script>/g, '').replace(/<link[^>]*>/g, '');
+const fileHelpers = await readFile(new URL('../public/transfer-files.js', import.meta.url), 'utf8');
 const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
 const manifest = JSON.parse(await readFile(new URL('../fixtures/manifest.json', import.meta.url)));
 const original = await readFile(new URL(`../fixtures/${manifest[0].id}.jpg`, import.meta.url));
@@ -41,6 +42,7 @@ async function harness(t, { intercept } = {}) {
     if (handled) return handled;
     return fetch(url, { ...options, headers: { ...options.headers, Origin: base } });
   };
+  window.eval(fileHelpers);
   window.eval(app);
   const $ = selector => window.document.querySelector(selector);
   const all = selector => [...window.document.querySelectorAll(selector)];
@@ -88,9 +90,9 @@ test('DOM: original transfer creates unchanged Blob and save only reports browse
   await until(() => h.$('.queue-item')?.dataset.state === 'ready');
   assert.equal(h.all('.queue-item').length, 1); assert.equal(h.blobs.size, 1);
   assert.deepEqual(Buffer.from(await [...h.blobs.values()][0].arrayBuffer()), original);
-  h.click('.queue-item-top button'); assert.equal(h.saved.length, 1); assert.equal(h.saved[0].filename, 'R0000001.JPG');
+  h.click('.queue-item-top button'); assert.equal(h.saved.length, 1); assert.equal(h.saved[0].filename, '8-100RICOH__R0000001.JPG');
   assert.match(h.$('.queue-item-status').textContent, /Sent to browser/);
-  h.click('.queue-remove'); assert.equal(h.blobs.size, 0); assert.equal(h.revoked.length, 1);
+  h.click('.queue-remove'); assert.equal(h.blobs.size, 1); assert.equal(h.revoked.length, 1); // separate download lease remains briefly valid
 });
 
 test('DOM: sequential selected downloads, repeat-click deduplication and clear release all Blobs', async t => {
@@ -135,7 +137,7 @@ test('DOM: cancel aborts active stream and queued files without starting the nex
     }
   }});
   await h.demo(); h.click('#select-visible'); h.click('#transfer'); await until(() => reads === 1);
-  assert.equal(h.$('#disconnect').disabled, true); h.click('#cancel-queue');
+  assert.equal(h.$('#disconnect').disabled, false); h.click('#cancel-queue');
   await until(() => h.all('.queue-item[data-state="cancelled"]').length === 12);
   assert.equal(reads, 1); assert.equal(h.blobs.size, 0); assert.equal(h.$('#disconnect').disabled, false);
 });
@@ -168,10 +170,12 @@ test('DOM: large list paginates 24 frames, keeps cross-page selections and displ
   assert.equal(h.$('.photo-meta h3').textContent, '<img src=x onerror=alert(1)>.JPG');
 });
 
-test('DOM: disconnect and pagehide release retained files; help states phone networking limit', async t => {
+test('DOM: disconnect preserves completed originals; help states phone networking limit', async t => {
   const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer');
   await until(() => h.$('.queue-item')?.dataset.state === 'ready'); h.click('#disconnect'); await until(() => !h.$('#landing').hidden);
-  assert.equal(h.blobs.size, 0); assert.equal(h.$('#workspace').hidden, true);
+  assert.equal(h.blobs.size, 1); assert.equal(h.$('#workspace').hidden, true);
+  assert.equal(h.$('#offline-transfers').hidden, false);
+  h.click('.queue-item-top button'); assert.equal(h.saved.length, 1);
   h.click('[data-help="phone"]'); assert.match(h.$('#help-content').textContent, /will not reach this computer/);
   h.click('#help-dialog .close-dialog'); assert.equal(h.window.document.body.classList.contains('has-modal'), false);
 });
@@ -222,4 +226,84 @@ test('DOM: late old transfer cannot cancel a new tray after Back/Forward restore
   h.click('.photo-select input'); h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'ready');
   releaseOld(); await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(h.all('.queue-item').length, 1); assert.equal(h.$('.queue-item').dataset.state, 'ready'); assert.equal(h.blobs.size, 1);
+});
+
+test('DOM: disconnect during batch cancels the active file and preserves already completed originals offline', async t => {
+  let reads = 0;
+  const h = await harness(t, { intercept: async (url, opts) => {
+    if (url.pathname.endsWith('/original') && ++reads === 2) return new Response(new ReadableStream({ start(c) { c.enqueue(original.subarray(0, 30)); opts.signal.addEventListener('abort', () => c.error(new DOMException('cancelled', 'AbortError'))); } }), { headers: { 'Content-Type': 'image/jpeg', 'X-File-Size': original.length } });
+  }});
+  await h.demo(); h.click('#select-visible'); h.click('#transfer'); await until(() => reads === 2);
+  h.click('#disconnect'); await until(() => !h.$('#landing').hidden && !h.$('#disconnect').disabled);
+  assert.equal(h.all('.queue-item[data-state="ready"]').length, 1); assert.equal(h.all('.queue-item[data-state="cancelled"]').length, 11);
+  assert.equal(h.$('#offline-transfers').hidden, false); assert.equal(h.blobs.size, 1);
+  assert.equal(h.all('.queue-item button[aria-label^="Retry"]').length, 0);
+  h.click('.queue-item[data-state="ready"] .queue-item-top button'); assert.equal(h.saved.length, 1);
+});
+
+test('DOM: reconnect permits same file ID from a new source session without discarding old completed files', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  h.click('#disconnect'); await until(() => !h.$('#landing').hidden && !h.$('#disconnect').disabled);
+  h.click('#try-demo'); await until(() => !h.$('#workspace').hidden && !h.$('#disconnect').disabled);
+  assert.equal(h.blobs.size, 1); h.click('.photo-select input'); h.click('#transfer');
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 2);
+  assert.equal(h.blobs.size, 2); assert.equal(h.$('#offline-transfers').hidden, true);
+});
+
+test('DOM: failed camera switch retains previously completed demo originals for saving', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  h.click('#switch-camera'); h.click('#confirm-connect'); await until(() => !h.$('#connect-error').hidden);
+  h.click('#connect-dialog .close-dialog'); assert.equal(h.$('#offline-transfers').hidden, false); assert.equal(h.blobs.size, 1);
+  h.click('.queue-item-top button'); assert.equal(h.saved.length, 1);
+});
+
+test('DOM: stale source errors are not offered as blindly repeatable retries', async t => {
+  const h = await harness(t, { intercept: async url => url.pathname.endsWith('/original') ? Response.json({ error: 'Gallery session ended.', code: 'STALE_SESSION' }, { status: 409 }) : undefined });
+  await h.demo(); h.click('.photo-select input'); h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'failed');
+  assert.equal(h.$('.queue-item-top button'), null); assert.match(h.$('.queue-item-status').textContent, /Reconnect and reselect/);
+});
+
+test('DOM: ZIP creation, explicit save handoff, offline save and clear release archive plus originals', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
+  assert.equal(h.blobs.size, 2); assert.match(h.$('#archive-status').textContent, /SHA-256 manifest/);
+  h.click('#disconnect'); await until(() => !h.$('#landing').hidden && !h.$('#disconnect').disabled);
+  h.click('#save-archive'); assert.equal(h.saved.length, 1); assert.match(h.saved[0].filename, /^gr3-originals-.*\.zip$/);
+  assert.equal(h.saved[0].blob.type, 'application/zip'); assert.match(h.$('#archive-status').textContent, /saving to disk is not verified/);
+  h.click('#clear-queue'); assert.equal(h.blobs.size, 1); assert.equal(h.$('#offline-transfers').hidden, true); // ZIP handoff lease survives clear
+});
+
+test('DOM: failed Blob URL allocation cannot create an unaccounted archive-eligible transfer', async t => {
+  const h = await harness(t); await h.demo();
+  const create = h.window.URL.createObjectURL; h.window.URL.createObjectURL = () => { throw new Error('Synthetic URL allocation failure'); };
+  h.click('.photo-select input'); h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'failed');
+  assert.equal(h.blobs.size, 0); assert.equal(h.$('#build-archive').disabled, true); assert.equal(h.$('.queue-save-name'), null);
+  h.window.URL.createObjectURL = create; h.click('.queue-item-top button'); await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  assert.equal(h.blobs.size, 1); h.click('#clear-queue'); assert.equal(h.blobs.size, 0);
+});
+
+test('DOM: cancelling ZIP preparation keeps ready originals and permits a later ZIP retry', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  const originalHelpers = h.window.GRTransferFiles;
+  h.window.GRTransferFiles = { ...originalHelpers, buildArchive: (_entries, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')))) };
+  h.click('#build-archive'); assert.equal(h.$('#cancel-archive').hidden, false); h.click('#cancel-archive'); await until(() => h.$('#cancel-archive').hidden);
+  assert.equal(h.blobs.size, 1); assert.match(h.$('#archive-status').textContent, /cancelled.*still available/);
+  h.window.GRTransferFiles = originalHelpers; h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden); assert.equal(h.blobs.size, 2);
+});
+
+test('DOM: clearing immediately after Save ZIP preserves a bounded download URL until grace expiry', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
+  const timers = []; const set = h.window.setTimeout.bind(h.window);
+  h.window.setTimeout = (fn, ms, ...args) => ms === 30000 ? (timers.push(fn), timers.length) : set(fn, ms, ...args);
+  h.click('#save-archive'); const savedBlob = h.saved[0].blob;
+  h.click('#clear-queue'); assert.equal(h.blobs.size, 1); assert.ok([...h.blobs.values()].includes(savedBlob));
+  timers.forEach(fn => fn()); assert.equal(h.blobs.size, 0);
+});
+
+test('DOM: repeated individual Save reuses its download lease instead of retaining duplicate URLs', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  h.click('.queue-item-top button'); assert.equal(h.blobs.size, 2);
+  h.click('.queue-item-top button'); assert.equal(h.blobs.size, 2); assert.equal(h.saved.length, 2);
+  assert.equal(h.saved[0].blob, h.saved[1].blob);
 });

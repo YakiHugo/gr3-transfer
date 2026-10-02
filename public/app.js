@@ -6,7 +6,9 @@ const MEMORY_LIMIT = 256 * 1024 * 1024;
 const FILE_LIMIT = 128 * 1024 * 1024;
 const QUEUE_LIMIT = 48;
 const MAX_ATTEMPTS = 3;
-const state = { session: null, photos: [], selected: new Set(), page: 1, busy: true, generation: 0, queue: [], running: false, controller: null, previewId: null, retained: 0, requestController: new AbortController(), restoreClearedTray: false };
+const DOWNLOAD_GRACE_MS = 30000;
+const DOWNLOAD_LEASE_LIMIT = MEMORY_LIMIT + 1024 * 1024;
+const state = { session: null, photos: [], selected: new Set(), page: 1, busy: true, generation: 0, queue: [], running: false, controller: null, previewId: null, retained: 0, requestController: new AbortController(), restoreClearedTray: false, exporting: false, archive: null, archiveController: null, downloadLeases: new Map(), leasedBytes: 0 };
 let entryId = 0;
 
 function element(tag, className, text) {
@@ -62,8 +64,14 @@ async function post(path, body = {}) {
 }
 function setBusy(value) { state.busy = value; updateControls(); }
 function updateControls() {
-  const blocked = state.busy || state.running;
-  for (const id of ['landing-connect', 'try-demo', 'switch-camera', 'disconnect', 'refresh', 'confirm-connect']) $(id).disabled = blocked;
+  const blocked = state.busy || state.running || state.exporting;
+  for (const id of ['landing-connect', 'try-demo', 'switch-camera', 'refresh', 'confirm-connect']) $(id).disabled = blocked;
+  $('disconnect').disabled = state.busy || state.exporting;
+  $('build-archive').disabled = blocked || !state.queue.some(entry => entry.blob);
+  $('build-archive').hidden = state.exporting;
+  $('save-archive').hidden = !state.archive;
+  $('save-archive').disabled = state.exporting;
+  $('cancel-archive').hidden = !state.exporting;
   $('transfer').disabled = blocked || !state.selected.size;
   $('mobile-transfer').disabled = blocked || !state.selected.size;
   $('clear-queue').disabled = blocked;
@@ -73,24 +81,33 @@ function updateControls() {
   $('refresh').setAttribute('aria-busy', String(state.busy));
 }
 function release(entry) {
-  if (entry.objectUrl) {
-    URL.revokeObjectURL(entry.objectUrl);
-    entry.objectUrl = null;
-    state.retained = Math.max(0, state.retained - (entry.blobBytes || 0));
-    entry.blobBytes = 0;
-  }
+  if (entry.objectUrl) URL.revokeObjectURL(entry.objectUrl);
+  entry.objectUrl = null;
+  state.retained = Math.max(0, state.retained - (entry.blobBytes || 0));
+  entry.blobBytes = 0;
+  entry.blob = null;
 }
 function clearQueue() {
-  if (state.running) return;
+  if (state.running || state.exporting) return;
+  invalidateArchive();
   state.queue.forEach(release);
   state.queue = [];
   renderQueue();
 }
+function placeTray() {
+  const connected = Boolean(state.session?.connected);
+  const slot = connected ? $('connected-tray') : $('offline-tray');
+  if ($('queue-panel').parentElement !== slot) slot.append($('queue-panel'));
+  $('offline-transfers').hidden = connected || !state.queue.length;
+  $('offline-title').textContent = state.queue.some(entry => entry.blob) ? 'Your transferred files are still here.' : 'Transfer stopped.';
+}
+function currentSource(entry) { return state.session?.connected && entry.sourceId === state.session.sessionId; }
 function renderSession() {
   const session = state.session;
   const connected = Boolean(session?.connected);
   $('landing').hidden = connected;
   $('workspace').hidden = !connected;
+  placeTray();
   if (!connected) { $('mobile-selection').hidden = true; document.body.classList.remove('has-selection'); }
   const badge = $('connection-badge');
   badge.className = `status-pill ${connected ? session.mode : ''}`;
@@ -115,14 +132,13 @@ function applyPhotos(result) {
   renderGallery();
 }
 async function connect(mode) {
-  if (state.busy || state.running) return;
+  if (state.busy || state.running || state.exporting) return;
   setBusy(true);
   const generation = ++state.generation;
   $('connect-error').hidden = true;
   try {
     const session = await post('/api/connect', { mode });
     if (generation !== state.generation) return;
-    clearQueue();
     state.session = session;
     state.selected.clear();
     state.page = 1;
@@ -131,6 +147,7 @@ async function connect(mode) {
     const result = await api('/api/photos');
     if (generation !== state.generation) return;
     applyPhotos(result);
+    renderQueue();
     renderSession();
     closeDialog($('connect-dialog'));
     $('notice').hidden = true;
@@ -144,7 +161,7 @@ async function connect(mode) {
     state.session = session;
     state.photos = [];
     state.selected.clear();
-    clearQueue();
+    renderQueue();
     renderSession();
     const message = error.message || 'Connection failed. Check the bridge and camera Wi-Fi.';
     if ($('connect-dialog').open) { $('connect-error').textContent = message; $('connect-error').hidden = false; }
@@ -154,24 +171,31 @@ async function connect(mode) {
   }
 }
 async function disconnect() {
-  if (state.busy || state.running) return;
+  if (state.busy || state.exporting) return;
   setBusy(true);
   const generation = ++state.generation;
+  state.controller?.abort();
+  state.controller = null;
+  state.running = false;
+  state.queue.filter(entry => ['queued', 'transferring'].includes(entry.status)).forEach(entry => { entry.status = 'cancelled'; });
+  renderQueue();
   try {
     const session = await post('/api/disconnect');
     if (generation !== state.generation) return;
     state.session = session;
-    clearQueue();
     state.photos = [];
     state.selected.clear();
     closeDialog($('preview-dialog'));
+    renderQueue();
     renderSession();
-    $('notice').hidden = true;
-  } catch (error) { if (generation === state.generation) notify(error.message, true); }
-  finally { if (generation === state.generation) setBusy(false); }
+    notify('Disconnected. Completed originals remain in this tab for saving; incomplete transfers were cancelled.');
+  } catch (error) {
+    if (generation !== state.generation) return;
+    notify(`Transfers were stopped, but the bridge could not confirm disconnect. Completed originals are still available. ${error.message}`, true);
+  } finally { if (generation === state.generation) setBusy(false); }
 }
 async function refresh() {
-  if (state.busy || state.running) return;
+  if (state.busy || state.running || state.exporting) return;
   setBusy(true);
   const generation = state.generation;
   try {
@@ -257,7 +281,7 @@ function renderGallery() {
     const detail = element('div');
     const title = element('h3', '', photo.name);
     title.title = photo.name;
-    detail.append(title, element('p', '', bytes(photo.bytes)));
+    detail.append(title, element('p', '', `${photo.folder} · ${bytes(photo.bytes)}`));
     meta.append(detail, element('span', 'photo-type', photo.synthetic ? 'DEMO / JPG' : 'JPG'));
     card.append(preview, label, meta);
     $('gallery').append(card);
@@ -326,21 +350,22 @@ function showHelp(kind) {
     ['Saving on a phone', 'If a future supported setup makes the page reachable, your browser controls the save destination. A file may go to Downloads or Files; adding it to your Photos library is a separate platform-specific action.']
   ] : [
     ['1. Choose and transfer', 'Select JPEGs from the contact sheet, then choose Transfer originals. Files transfer one at a time from the source into browser memory. Progress is measured in bytes; a percentage appears only when the source provides a file size.'],
-    ['2. Save each file', 'When a file is ready, choose Save. The browser receives the original JPEG bytes, without resizing or recompression. A browser handoff does not prove the file reached your disk. Check your Downloads or Files app; photo-library import is separate.'],
-    ['Keep the session small', 'The tray can hold up to 48 entries and 256 MB of file data. Each file is limited to 128 MB. Save and remove files, or clear the tray, before transferring more. Clear, disconnect, or reloading this page discards unsaved files from memory.'],
+    ['2. Save originals individually or together', 'Choose Save for a ready JPEG, or prepare a ZIP containing all ready JPEGs, camera folders and a SHA-256 manifest. Individual filenames include a folder prefix. ZIPs keep the original filenames inside directories. Neither method rewrites image bytes or EXIF. Check Downloads or Files: handing a file to the browser does not prove it reached disk.'],
+    ['Keep the session small', 'The tray can hold up to 48 entries and 256 MB of file data. Each file is limited to 128 MB. Save and remove files, or clear the tray, before transferring more. Disconnect keeps completed files available in this tab. Clear or closing/reloading this page discards unsaved files from memory.'],
     ['A prototype, honestly', 'Demo images are synthetic fixtures. Real Ricoh GR III Wi-Fi transfer has not been tested on physical hardware. The camera must be connected to the bridge computer over Wi-Fi; Bluetooth is not used for original-file transfer.']
   ];
   sections.forEach(([title, body]) => $('help-content').append(element('h3', '', title), element('p', '', body)));
   openDialog($('help-dialog'));
 }
 function addToQueue() {
-  if (state.running || state.busy) return;
+  if (state.running || state.busy || state.exporting) return;
   const selected = state.photos.filter(photo => state.selected.has(photo.id));
-  const existing = new Set(state.queue.map(entry => entry.photo.id));
+  const existing = new Set(state.queue.filter(currentSource).map(entry => entry.photo.id));
   const additions = selected.filter(photo => !existing.has(photo.id));
   if (!additions.length) { notify('These frames are already in the transfer tray. Save ready files, retry a failed transfer, or remove an entry to transfer it again.'); return; }
   if (state.queue.length + additions.length > QUEUE_LIMIT) { notify(`The tray holds ${QUEUE_LIMIT} entries. Select fewer frames or clear completed entries first.`, true); return; }
-  additions.forEach(photo => state.queue.push({ id: ++entryId, photo: { ...photo }, status: 'queued', received: 0, expected: knownSize(photo.bytes) ? photo.bytes : null, attempts: 0, objectUrl: null, blobBytes: 0, error: '' }));
+  invalidateArchive();
+  additions.forEach(photo => state.queue.push({ id: ++entryId, sourceId: state.session.sessionId, sourceMode: state.session.mode, photo: { ...photo }, status: 'queued', received: 0, expected: knownSize(photo.bytes) ? photo.bytes : null, attempts: 0, objectUrl: null, blob: null, blobBytes: 0, retryable: true, error: '' }));
   renderQueue();
   runQueue();
 }
@@ -349,6 +374,7 @@ function itemStatus(entry) {
   if (entry.status === 'transferring') return `${bytes(entry.received)}${knownSize(entry.expected) ? ` / ${bytes(entry.expected)}` : ' transferred · size unknown'}`;
   if (entry.status === 'ready') return `${bytes(entry.blobBytes)} · ready to save`;
   if (entry.status === 'handed-off') return 'Sent to browser · check Downloads';
+  if (['cancelled', 'failed'].includes(entry.status) && !currentSource(entry)) return 'Source disconnected or changed · reconnect and reselect this frame';
   if (entry.status === 'cancelled') return 'Cancelled · no file saved';
   return entry.error || 'Transfer failed · no file saved';
 }
@@ -362,20 +388,22 @@ function renderQueue() {
     const top = element('div', 'queue-item-top');
     const img = element('img', 'queue-thumb');
     img.alt = ''; img.loading = 'lazy';
-    try { img.src = safeLocalUrl(entry.photo.thumbnailUrl); } catch { /* Text still identifies the file. */ }
+    if (currentSource(entry)) { try { img.src = safeLocalUrl(entry.photo.thumbnailUrl); } catch { /* Text still identifies the file. */ } }
+    else img.hidden = true;
     const info = element('div', 'queue-item-info');
     const name = element('p', 'queue-item-name', entry.photo.name); name.title = entry.photo.name;
-    info.append(name, element('p', 'queue-item-status', itemStatus(entry)));
+    info.append(name, element('p', 'queue-item-source', `${entry.photo.folder} · ${entry.sourceMode === 'demo' ? 'synthetic demo' : 'GR III source'}`), element('p', 'queue-item-status', itemStatus(entry)));
+    if (entry.blob) info.append(element('p', 'queue-save-name', `Save as ${GRTransferFiles.downloadName(entry.photo)}`));
     top.append(img, info);
     if (entry.status === 'ready' || entry.status === 'handed-off') {
       const save = element('button', 'button secondary', entry.status === 'ready' ? 'Save' : 'Save again');
       save.type = 'button'; save.setAttribute('aria-label', `Save ${entry.photo.name}`);
       save.addEventListener('click', () => saveEntry(entry)); top.append(save);
-    } else if (['failed', 'cancelled'].includes(entry.status) && entry.attempts < MAX_ATTEMPTS) {
+    } else if (['failed', 'cancelled'].includes(entry.status) && entry.attempts < MAX_ATTEMPTS && currentSource(entry) && entry.retryable !== false) {
       const retry = element('button', 'button secondary', 'Retry');
-      retry.type = 'button'; retry.disabled = state.running || state.busy;
+      retry.type = 'button'; retry.disabled = state.running || state.busy || state.exporting;
       retry.setAttribute('aria-label', `Retry ${entry.photo.name}`);
-      retry.addEventListener('click', () => { if (state.running || state.busy) return; entry.status = 'queued'; entry.error = ''; entry.received = 0; renderQueue(); runQueue(); });
+      retry.addEventListener('click', () => { if (state.running || state.busy || state.exporting || !currentSource(entry)) return; entry.status = 'queued'; entry.error = ''; entry.received = 0; entry.expected = knownSize(entry.photo.bytes) ? entry.photo.bytes : null; renderQueue(); runQueue(); });
       top.append(retry);
     }
     row.append(top);
@@ -386,14 +414,15 @@ function renderQueue() {
       row.append(progress);
     } else if (!['queued'].includes(entry.status)) {
       const remove = element('button', 'text-button queue-remove', 'Remove');
-      remove.type = 'button'; remove.disabled = state.running;
+      remove.type = 'button'; remove.disabled = state.running || state.exporting;
       remove.setAttribute('aria-label', `Remove ${entry.photo.name} from the transfer tray`);
-      remove.addEventListener('click', () => { if (state.running) return; release(entry); state.queue = state.queue.filter(item => item !== entry); renderQueue(); });
+      remove.addEventListener('click', () => { if (state.running || state.exporting) return; invalidateArchive(); release(entry); state.queue = state.queue.filter(item => item !== entry); renderQueue(); });
       row.append(remove);
     }
     $('queue-list').append(row);
   });
   updateQueueSummary();
+  placeTray();
   updateControls();
 }
 function updateQueueSummary() {
@@ -413,24 +442,27 @@ function updateEntryProgress(entry) {
 }
 async function transferEntry(entry, signal, generation) {
   entry.attempts++;
-  entry.status = 'transferring'; entry.received = 0; entry.error = '';
+  entry.status = 'transferring'; entry.received = 0; entry.error = ''; entry.retryable = true;
+  entry.expected = knownSize(entry.photo.bytes) ? entry.photo.bytes : null;
   renderQueue();
   let reader;
   let response;
   try {
+    if (!currentSource(entry)) { entry.retryable = false; throw new Error('The source changed. Reconnect and reselect this frame.'); }
     if (knownSize(entry.expected) && entry.expected > FILE_LIMIT) throw new Error('This file exceeds the 128 MB per-file limit.');
-    if (knownSize(entry.expected) && state.retained + entry.expected > MEMORY_LIMIT) throw new Error('Tray memory is full. Save and remove ready files, then retry.');
+    if (knownSize(entry.expected) && state.retained + state.leasedBytes + entry.expected > MEMORY_LIMIT) throw new Error('Tray memory is full. Save and remove ready files, then retry. Recent browser downloads may need up to 30 seconds to release their download links.');
     response = await fetch(safeLocalUrl(entry.photo.originalUrl), { signal, cache: 'no-store', credentials: 'same-origin' });
     if (!response.ok) {
       const failure = await response.json().catch(() => ({}));
-      throw new Error(failure.error || `Transfer failed (${response.status}).`);
+      if (['STALE_SESSION', 'PHOTO_NOT_FOUND', 'DISCONNECTED'].includes(failure.code)) entry.retryable = false;
+      throw new Error(`${failure.error || `Transfer failed (${response.status}).`}${entry.retryable ? '' : ' Reconnect and reselect this frame; this old transfer cannot be retried.'}`);
     }
     const contentType = response.headers.get('Content-Type') || '';
     if (!contentType.toLowerCase().startsWith('image/jpeg')) throw new Error('The source did not return a JPEG. No file was prepared.');
     const header = response.headers.get('X-File-Size') || response.headers.get('Content-Length');
     if (header && /^\d+$/.test(header)) entry.expected = Number(header);
     if (knownSize(entry.expected) && entry.expected > FILE_LIMIT) throw new Error('This file exceeds the 128 MB per-file limit.');
-    if (knownSize(entry.expected) && state.retained + entry.expected > MEMORY_LIMIT) throw new Error('Tray memory is full. Save and remove ready files, then retry.');
+    if (knownSize(entry.expected) && state.retained + state.leasedBytes + entry.expected > MEMORY_LIMIT) throw new Error('Tray memory is full. Save and remove ready files, then retry. Recent browser downloads may need up to 30 seconds to release their download links.');
     if (!response.body?.getReader) throw new Error('Streaming downloads are unavailable in this browser. Try a current desktop browser.');
     reader = response.body.getReader();
     const chunks = [];
@@ -440,9 +472,9 @@ async function transferEntry(entry, signal, generation) {
       if (signal.aborted || generation !== state.generation) throw new DOMException('Cancelled', 'AbortError');
       if (done) break;
       entry.received += value.byteLength;
-      if (entry.received > FILE_LIMIT || state.retained + entry.received > MEMORY_LIMIT) {
+      if (entry.received > FILE_LIMIT || state.retained + state.leasedBytes + entry.received > MEMORY_LIMIT) {
         await reader.cancel();
-        throw new Error('Tray memory limit reached. Save and remove ready files, then retry.');
+        throw new Error('Tray memory limit reached. Save and remove ready files, then retry. Recent download links may need up to 30 seconds to release.');
       }
       chunks.push(value);
       if (performance.now() - lastPaint > 100) { updateEntryProgress(entry); lastPaint = performance.now(); }
@@ -451,7 +483,10 @@ async function transferEntry(entry, signal, generation) {
     if (knownSize(entry.expected) && entry.expected !== entry.received) throw new Error('The transfer ended with a size mismatch. Retry before saving.');
     if (signal.aborted || generation !== state.generation) throw new DOMException('Cancelled', 'AbortError');
     const blob = new Blob(chunks, { type: 'image/jpeg' });
-    entry.objectUrl = URL.createObjectURL(blob);
+    const objectUrl = URL.createObjectURL(blob);
+    // Publish a complete, accounted ready entry only after URL allocation succeeds.
+    entry.blob = blob;
+    entry.objectUrl = objectUrl;
     entry.blobBytes = blob.size;
     state.retained += blob.size;
     entry.status = 'ready';
@@ -463,7 +498,7 @@ async function transferEntry(entry, signal, generation) {
   } finally { if (reader) { try { reader.releaseLock(); } catch { /* Reader already released. */ } } }
 }
 async function runQueue() {
-  if (state.running || state.busy) return;
+  if (state.running || state.busy || state.exporting) return;
   state.running = true;
   const generation = state.generation;
   state.controller = new AbortController();
@@ -493,14 +528,71 @@ function cancelQueue() {
   const generation = state.generation;
   setTimeout(() => { if (generation === state.generation) $('cancel-queue').disabled = false; }, 200);
 }
-function saveEntry(entry) {
-  if (!entry.objectUrl) { notify('This transfer is no longer available in memory. Remove it from the tray and transfer the frame again.', true); return; }
+function handoffDownload(blob, filename) {
+  // Use a separate short-lived URL so Clear/Remove cannot revoke a download
+  // link before the browser consumes the asynchronous anchor navigation.
+  let lease = state.downloadLeases.get(blob);
+  if (!lease) {
+    if (state.leasedBytes + blob.size > DOWNLOAD_LEASE_LIMIT) throw new Error('Recent downloads are still being handed to the browser. Wait up to 30 seconds before saving another batch.');
+    lease = { objectUrl: URL.createObjectURL(blob), bytes: blob.size, timer: null };
+    state.downloadLeases.set(blob, lease);
+    state.leasedBytes += blob.size;
+  }
+  clearTimeout(lease.timer);
+  lease.timer = setTimeout(() => {
+    URL.revokeObjectURL(lease.objectUrl);
+    state.downloadLeases.delete(blob);
+    state.leasedBytes = Math.max(0, state.leasedBytes - lease.bytes);
+  }, DOWNLOAD_GRACE_MS);
   const anchor = element('a');
-  anchor.href = entry.objectUrl;
-  anchor.download = entry.photo.name.replace(/[\/\\\u0000-\u001f]/g, '_');
-  document.body.append(anchor); anchor.click(); anchor.remove();
-  entry.status = 'handed-off';
+  anchor.href = lease.objectUrl; anchor.download = filename;
+  document.body.append(anchor);
+  try { anchor.click(); } finally { anchor.remove(); }
+}
+function saveEntry(entry) {
+  if (!entry.objectUrl || !entry.blob) { notify('This transfer is no longer available in memory. Remove it from the tray and transfer the frame again.', true); return; }
+  try {
+    handoffDownload(entry.blob, GRTransferFiles.downloadName(entry.photo));
+    entry.status = 'handed-off';
+    renderQueue();
+  } catch (error) { notify(`The JPEG could not be handed to your browser. ${error.message}`, true); }
+}
+
+function invalidateArchive() {
+  if (state.archive) URL.revokeObjectURL(state.archive.objectUrl);
+  state.archive = null;
+  $('archive-status').textContent = '';
+}
+async function prepareArchive() {
+  if (state.busy || state.running || state.exporting) return;
+  const entries = state.queue.filter(entry => entry.blob);
+  if (!entries.length) return;
+  invalidateArchive();
+  state.exporting = true;
+  state.archiveController = new AbortController();
+  const signal = state.archiveController.signal;
+  const generation = state.generation;
   renderQueue();
+  $('archive-status').textContent = 'Preparing original JPEGs and SHA-256 checksums…';
+  try {
+    const archive = await GRTransferFiles.buildArchive(entries, { signal, onProgress: (done, total) => {
+      if (generation === state.generation) $('archive-status').textContent = `Checked ${done} of ${total} JPEGs…`;
+    } });
+    if (generation !== state.generation || signal.aborted) return;
+    state.archive = { blob: archive.blob, objectUrl: URL.createObjectURL(archive.blob), filename: archive.filename, count: entries.length };
+    $('archive-status').textContent = `${entries.length} original JPEGs ready in a ZIP with folders and SHA-256 manifest. Save ZIP, then check Downloads.`;
+  } catch (error) {
+    if (generation === state.generation) $('archive-status').textContent = signal.aborted ? 'ZIP preparation cancelled. Your ready JPEGs are still available.' : `ZIP could not be prepared. ${error.message}`;
+  } finally {
+    if (generation === state.generation) { state.exporting = false; state.archiveController = null; renderQueue(); }
+  }
+}
+function saveArchive() {
+  if (!state.archive || state.exporting) return;
+  try {
+    handoffDownload(state.archive.blob, state.archive.filename);
+    $('archive-status').textContent = `ZIP sent to browser (${state.archive.count} JPEGs). Check Downloads and the manifest; saving to disk is not verified here.`;
+  } catch (error) { $('archive-status').textContent = `The ZIP could not be handed to your browser. ${error.message}`; }
 }
 
 $('try-demo').addEventListener('click', () => connect('demo'));
@@ -518,6 +610,9 @@ $('transfer').addEventListener('click', addToQueue);
 $('mobile-transfer').addEventListener('click', () => { addToQueue(); if (state.queue.length) $('queue-panel').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' }); });
 $('cancel-queue').addEventListener('click', cancelQueue);
 $('clear-queue').addEventListener('click', clearQueue);
+$('build-archive').addEventListener('click', prepareArchive);
+$('save-archive').addEventListener('click', saveArchive);
+$('cancel-archive').addEventListener('click', () => state.archiveController?.abort());
 for (const button of document.querySelectorAll('.help-trigger')) button.addEventListener('click', () => showHelp(button.dataset.help));
 for (const button of document.querySelectorAll('.close-dialog')) button.addEventListener('click', () => closeDialog(button.closest('dialog')));
 for (const dialog of document.querySelectorAll('dialog')) {
@@ -533,6 +628,9 @@ function suspendPage() {
   state.generation++;
   state.restoreClearedTray = state.restoreClearedTray || state.queue.length > 0;
   state.controller?.abort();
+  state.archiveController?.abort();
+  state.exporting = false;
+  invalidateArchive();
   state.requestController.abort();
   state.controller = null;
   state.running = false;

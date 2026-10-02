@@ -10,6 +10,7 @@ import { JpegValidator } from './jpeg.js';
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const STATIC = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
+  ['/transfer-files.js', ['transfer-files.js', 'text/javascript; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
   ['/favicon.svg', ['favicon.svg', 'image/svg+xml']],
@@ -98,7 +99,7 @@ export async function createBridge({ adapter = new CameraAdapter(), fixtureRoot 
   let state = { mode: 'disconnected', connected: false, model: 'RICOH GR III', firmware: null, battery: null };
   let photos = [];
   let photoMap = new Map();
-  const session = () => ({ ...state, csrfToken, hardwareVerified: false, photosCount: photos.length, localOnly: true });
+  const session = () => ({ ...state, csrfToken, hardwareVerified: false, sessionId: generation, photosCount: photos.length, localOnly: true });
   const reset = () => {
     controller.abort(); controller = new AbortController(); generation = randomBytes(12).toString('hex');
     photos = []; photoMap = new Map();
