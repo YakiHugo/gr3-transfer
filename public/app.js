@@ -499,6 +499,8 @@ async function transferEntry(entry, signal, generation) {
 }
 async function runQueue() {
   if (state.running || state.busy || state.exporting) return;
+  // A retry can add a ready file to a previously packaged partial batch.
+  invalidateArchive();
   state.running = true;
   const generation = state.generation;
   state.controller = new AbortController();

@@ -48,3 +48,20 @@ The publication includes application code, tests, documentation, and 12 generate
 ## Deliberately outside this build
 
 BLE pairing/wake, direct native phone transfers, exposed LAN/QR sharing, cloud upload, background sync, resumable ranges, camera mutations, RAW processing, other camera models, or remote deployment.
+
+
+## Additional synthetic retry/ZIP QA, October 3, 2026
+
+A local follow-on to draft PR #1 found a stale partial-archive issue: after five of six transfers succeeded, preparing a ZIP and then successfully retrying the sixth file left the earlier five-file ZIP available. The scoped fix invalidates an existing archive whenever a transfer queue starts, including retries. A regression test verifies that the old archive disappears and the next archive contains all six ready entries.
+
+The revised local code passes **85/85** checks (47 bridge/protocol/security, 9 packaging, 29 DOM interaction), plus syntax and whitespace checks. Added cases cover cancelled-file retry without restarting the rest of the cancelled queue, archive URL-allocation failure and recovery, and a two-session, 24-JPEG transfer followed by offline ZIP handoff and immediate tray clearing.
+
+For independent archive decoding, Python 3 is optional:
+
+```sh
+RUN_PYTHON_ZIP_AUDIT=1 npm run check
+```
+
+This additional audit decodes the ZIP produced through the DOM transfer flow with Python's standard-library `zipfile`: all 24 JPEGs match their synthetic source bytes, CRC checks pass, SHA-256 and byte lengths match the manifest, and the two source sessions have separate archive paths. Ordinary `npm run check` remains Node-only.
+
+These remain local synthetic HTTP/DOM and in-memory handoff checks. No physical camera, real browser rendering, phone transfer, or actual browser save to disk was verified. This follow-on is not evidence of a push, merge, CI run, or deployment.
