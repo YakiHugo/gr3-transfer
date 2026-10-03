@@ -10,8 +10,8 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test tests/*.test.js",
-    "check": "node --check src/server.js && node --check src/camera.js && node --check src/jpeg.js && node --check public/app.js && npm test",
-    "test:core": "node --test tests/core.test.js tests/audit.test.js",
+    "check": "node --check src/server.js && node --check src/camera.js && node --check src/jpeg.js && node --check public/transfer-files.js && node --check public/app.js && npm test",
+    "test:core": "node --test tests/core.test.js tests/audit.test.js tests/transfer-files.test.js",
     "test:dom": "node --test tests/ui.dom.test.js"
   },
   "devDependencies": {
