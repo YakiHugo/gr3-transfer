@@ -10,6 +10,7 @@ const DOWNLOAD_GRACE_MS = 30000;
 const DOWNLOAD_LEASE_LIMIT = MEMORY_LIMIT + 1024 * 1024;
 const state = { session: null, photos: [], selected: new Set(), page: 1, busy: true, connecting: false, generation: 0, queue: [], running: false, controller: null, previewId: null, retained: 0, requestController: new AbortController(), restoreClearedTray: false, exporting: false, archive: null, archiveController: null, downloadLeases: new Map(), leasedBytes: 0 };
 let entryId = 0;
+let unloadGuardActive = false;
 // Reuse locale collation and one derived list, rather than sorting the whole card
 // again for every selection, preview toggle or page navigation.
 const photoNameCollator = new Intl.Collator(undefined, { numeric: true });
@@ -74,6 +75,7 @@ async function post(path, body = {}) {
 function setBusy(value) { state.busy = value; updateControls(); }
 function updateControls() {
   renderTransferPlan();
+  updateUnloadGuard();
   const blocked = state.busy || state.running || state.exporting;
   for (const id of ['landing-connect', 'try-demo', 'switch-camera', 'refresh', 'confirm-connect']) $(id).disabled = blocked;
   $('disconnect').disabled = state.busy || state.exporting;
@@ -99,8 +101,23 @@ function release(entry) {
   entry.blobBytes = 0;
   entry.blob = null;
 }
+function unhandedOriginal(entry) { return Boolean(entry.blob) && entry.status !== 'handed-off' && !entry.archiveHandedOff; }
+function confirmDiscard(entries) {
+  const count = entries.filter(unhandedOriginal).length;
+  return !count || window.confirm(`Discard ${count} original${count === 1 ? '' : 's'} not yet sent to your browser? Save first to keep a copy. Removing from this tab cannot be undone; camera files are unchanged.`);
+}
+function warnBeforeUnload(event) {
+  if (!state.running && !state.queue.some(unhandedOriginal)) return;
+  event.preventDefault(); event.returnValue = '';
+}
+function updateUnloadGuard() {
+  const needed = state.running || state.queue.some(unhandedOriginal);
+  if (needed === unloadGuardActive) return;
+  window[needed ? 'addEventListener' : 'removeEventListener']('beforeunload', warnBeforeUnload);
+  unloadGuardActive = needed;
+}
 function clearQueue() {
-  if (state.running || state.exporting) return;
+  if (state.running || state.exporting || !confirmDiscard(state.queue)) return;
   invalidateArchive();
   state.queue.forEach(release);
   state.queue = [];
@@ -537,7 +554,7 @@ function renderQueue() {
       const remove = element('button', 'text-button queue-remove', 'Remove');
       remove.type = 'button'; remove.disabled = state.running || state.exporting;
       remove.setAttribute('aria-label', `Remove ${entry.photo.name} from the transfer tray`);
-      remove.addEventListener('click', () => { if (state.running || state.exporting) return; invalidateArchive(); release(entry); state.queue = state.queue.filter(item => item !== entry); renderQueue(); });
+      remove.addEventListener('click', () => { if (state.running || state.exporting || !confirmDiscard([entry])) return; invalidateArchive(); release(entry); state.queue = state.queue.filter(item => item !== entry); renderQueue(); });
       row.append(remove);
     }
     $('queue-list').append(row);
@@ -597,7 +614,7 @@ function updateEntryProgress(entry) {
 }
 async function transferEntry(entry, signal, generation) {
   const attempt = ++entry.attempts;
-  entry.startedAt = performance.now(); entry.finishedAt = null;
+  entry.startedAt = performance.now(); entry.finishedAt = null; entry.archiveHandedOff = false;
   entry.status = 'transferring'; entry.received = 0; entry.error = ''; entry.retryable = true;
   entry.expected = knownSize(entry.photo.bytes) ? entry.photo.bytes : null;
   renderQueue();
@@ -745,7 +762,7 @@ async function prepareArchive() {
       if (generation === state.generation) $('archive-status').textContent = `Checked ${done} of ${total} JPEGs…`;
     } });
     if (generation !== state.generation || signal.aborted) return;
-    state.archive = { blob: archive.blob, objectUrl: URL.createObjectURL(archive.blob), filename: archive.filename, count: entries.length };
+    state.archive = { blob: archive.blob, objectUrl: URL.createObjectURL(archive.blob), filename: archive.filename, count: entries.length, entries };
     $('archive-status').textContent = `${entries.length} original JPEGs ready in a ZIP with folders and SHA-256 manifest. Save ZIP, then check Downloads.`;
   } catch (error) {
     if (generation === state.generation) $('archive-status').textContent = signal.aborted ? 'ZIP preparation cancelled. Your ready JPEGs are still available.' : `ZIP could not be prepared. ${error.message}`;
@@ -757,6 +774,8 @@ function saveArchive() {
   if (!state.archive || state.exporting) return;
   try {
     handoffDownload(state.archive.blob, state.archive.filename);
+    state.archive.entries.forEach(entry => { entry.archiveHandedOff = true; });
+    updateUnloadGuard();
     $('archive-status').textContent = `ZIP sent to browser (${state.archive.count} JPEGs). Check Downloads and the manifest; saving to disk is not verified here.`;
   } catch (error) { $('archive-status').textContent = `The ZIP could not be handed to your browser. ${error.message}`; }
 }
