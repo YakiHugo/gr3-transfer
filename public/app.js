@@ -8,7 +8,7 @@ const QUEUE_LIMIT = 48;
 const MAX_ATTEMPTS = 3;
 const DOWNLOAD_GRACE_MS = 30000;
 const DOWNLOAD_LEASE_LIMIT = MEMORY_LIMIT + 1024 * 1024;
-const state = { session: null, photos: [], selected: new Set(), page: 1, busy: true, connecting: false, generation: 0, queue: [], running: false, controller: null, previewId: null, retained: 0, requestController: new AbortController(), restoreClearedTray: false, exporting: false, archive: null, archiveController: null, downloadLeases: new Map(), leasedBytes: 0 };
+const state = { session: null, photos: [], selected: new Set(), page: 1, busy: true, connecting: false, generation: 0, queue: [], running: false, controller: null, previewId: null, retained: 0, requestController: new AbortController(), restoreClearedTray: false, verifying: false, receiptController: null, exporting: false, archive: null, archiveController: null, downloadLeases: new Map(), leasedBytes: 0 };
 let entryId = 0;
 let unloadGuardActive = false;
 // Reuse locale collation and one derived list, rather than sorting the whole card
@@ -76,13 +76,13 @@ function setBusy(value) { state.busy = value; updateControls(); }
 function updateControls() {
   renderTransferPlan();
   updateUnloadGuard();
-  const blocked = state.busy || state.running || state.exporting;
+  const blocked = state.busy || state.running || state.exporting || state.verifying;
   for (const id of ['landing-connect', 'try-demo', 'switch-camera', 'refresh', 'confirm-connect']) $(id).disabled = blocked;
-  $('disconnect').disabled = state.busy || state.exporting;
+  $('disconnect').disabled = state.busy || state.exporting || state.verifying;
   $('build-archive').disabled = blocked || !state.queue.some(entry => entry.blob);
   $('build-archive').hidden = state.exporting;
   $('save-archive').hidden = !state.archive;
-  $('save-archive').disabled = state.exporting;
+  $('save-archive').disabled = state.exporting || state.verifying;
   $('cancel-archive').hidden = !state.exporting;
   $('transfer').disabled = blocked || !state.selected.size;
   $('mobile-transfer').disabled = blocked || !state.selected.size;
@@ -95,6 +95,7 @@ function updateControls() {
   $('refresh').setAttribute('aria-busy', String(state.busy));
 }
 function release(entry) {
+  entry.receipt = null;
   if (entry.objectUrl) URL.revokeObjectURL(entry.objectUrl);
   entry.objectUrl = null;
   state.retained = Math.max(0, state.retained - (entry.blobBytes || 0));
@@ -117,7 +118,7 @@ function updateUnloadGuard() {
   unloadGuardActive = needed;
 }
 function clearQueue() {
-  if (state.running || state.exporting || !confirmDiscard(state.queue)) return;
+  if (state.running || state.exporting || state.verifying || !confirmDiscard(state.queue)) return;
   invalidateArchive();
   state.queue.forEach(release);
   state.queue = [];
@@ -182,7 +183,7 @@ function showConnectionAdvice(code) {
   panel.hidden = false;
 }
 async function connect(mode) {
-  if (state.busy || state.running || state.exporting) return;
+  if (state.busy || state.running || state.exporting || state.verifying) return;
   state.connecting = true;
   setBusy(true);
   const generation = ++state.generation;
@@ -249,7 +250,7 @@ async function cancelConnection() {
   } finally { if (generation === state.generation) setBusy(false); }
 }
 async function disconnect() {
-  if (state.busy || state.exporting) return;
+  if (state.busy || state.exporting || state.verifying) return;
   setBusy(true);
   const generation = ++state.generation;
   state.controller?.abort();
@@ -274,7 +275,7 @@ async function disconnect() {
   } finally { if (generation === state.generation) setBusy(false); }
 }
 async function refresh() {
-  if (state.busy || state.running || state.exporting) return;
+  if (state.busy || state.running || state.exporting || state.verifying) return;
   setBusy(true);
   const generation = state.generation;
   try {
@@ -482,7 +483,7 @@ function renderTransferPlan() {
   $('transfer-plan').classList.toggle('blocked', Boolean(plan.blocked));
 }
 function addToQueue() {
-  if (state.running || state.busy || state.exporting) return;
+  if (state.running || state.busy || state.exporting || state.verifying) return;
   const plan = transferPlan();
   const additions = plan.additions;
   if (!additions.length) { notify('These frames are already in the transfer tray. Save ready files, retry a failed transfer, or remove an entry to transfer it again.'); return; }
@@ -506,6 +507,23 @@ function transferTiming(entry) {
     if (knownSize(entry.expected) && entry.expected > entry.received) parts.push(`about ${durationLabel((entry.expected - entry.received) / rate)} remaining`);
   }
   return parts.join(' · ');
+}
+async function verifyOriginal(entry) {
+  if (state.busy || state.running || state.exporting || state.verifying || !state.queue.includes(entry) || !entry.blob) return;
+  const generation = state.generation, blob = entry.blob;
+  state.verifying = true; entry.verifying = true; entry.verificationError = '';
+  const controller = new AbortController(); state.receiptController = controller;
+  renderQueue();
+  try {
+    const receipt = await GRTransferFiles.buildReceipt(entry, { signal: controller.signal });
+    if (controller.signal.aborted || generation !== state.generation || entry.blob !== blob || !state.queue.includes(entry)) return;
+    entry.receipt = receipt;
+  } catch (error) {
+    if (generation === state.generation) entry.verificationError = controller.signal.aborted ? 'Verification cancelled. Your original is still ready to save.' : `Verification unavailable: ${error.message}`;
+  } finally {
+    entry.verifying = false;
+    if (state.receiptController === controller) { state.verifying = false; state.receiptController = null; renderQueue(); }
+  }
 }
 function itemStatus(entry) {
   if (entry.status === 'queued') return 'Waiting its turn';
@@ -539,12 +557,27 @@ function renderQueue() {
       save.addEventListener('click', () => saveEntry(entry)); top.append(save);
     } else if (canRetry(entry)) {
       const retry = element('button', 'button secondary', 'Retry');
-      retry.type = 'button'; retry.disabled = state.running || state.busy || state.exporting;
+      retry.type = 'button'; retry.disabled = state.running || state.busy || state.exporting || state.verifying;
       retry.setAttribute('aria-label', `Retry ${entry.photo.name}`);
       retry.addEventListener('click', () => retryEntries([entry]));
       top.append(retry);
     }
     row.append(top);
+    if (entry.blob) {
+      const verification = element('div', 'file-verification');
+      const verify = element('button', 'text-button verify-original', entry.verifying ? 'Cancel verification' : entry.receipt ? 'Save verification receipt' : 'Verify original bytes');
+      verify.type = 'button';
+      verify.disabled = !entry.verifying && (state.running || state.exporting || state.verifying);
+      verify.addEventListener('click', () => {
+        if (entry.verifying) state.receiptController?.abort();
+        else if (entry.receipt) { try { handoffDownload(entry.receipt.blob, entry.receipt.filename); notify('Verification receipt sent to browser. It does not contain the JPEG; save the original separately.'); } catch (error) { notify(error.message, true); } }
+        else verifyOriginal(entry);
+      });
+      verification.append(verify);
+      if (entry.receipt) verification.append(element('p', 'save-note', `SHA-256: ${entry.receipt.receipt.sha256}`));
+      if (entry.verificationError) verification.append(element('p', 'save-note', entry.verificationError));
+      row.append(verification);
+    }
     if (entry.status === 'transferring') {
       const progress = element('progress');
       progress.setAttribute('aria-label', `Transfer progress for ${entry.photo.name}`);
@@ -552,9 +585,9 @@ function renderQueue() {
       row.append(progress);
     } else if (!['queued'].includes(entry.status)) {
       const remove = element('button', 'text-button queue-remove', 'Remove');
-      remove.type = 'button'; remove.disabled = state.running || state.exporting;
+      remove.type = 'button'; remove.disabled = state.running || state.exporting || state.verifying;
       remove.setAttribute('aria-label', `Remove ${entry.photo.name} from the transfer tray`);
-      remove.addEventListener('click', () => { if (state.running || state.exporting || !confirmDiscard([entry])) return; invalidateArchive(); release(entry); state.queue = state.queue.filter(item => item !== entry); renderQueue(); });
+      remove.addEventListener('click', () => { if (state.running || state.exporting || state.verifying || !confirmDiscard([entry])) return; invalidateArchive(); release(entry); state.queue = state.queue.filter(item => item !== entry); renderQueue(); });
       row.append(remove);
     }
     $('queue-list').append(row);
@@ -594,7 +627,7 @@ function renderRecovery() {
   $('recovery-note').textContent = notes.join(' ');
 }
 function retryEntries(entries) {
-  if (state.running || state.busy || state.exporting) return;
+  if (state.running || state.busy || state.exporting || state.verifying) return;
   // Recheck membership and source at click time, including old detached buttons.
   const eligible = entries.filter(entry => state.queue.includes(entry) && canRetry(entry));
   if (!eligible.length) return;
@@ -678,7 +711,7 @@ async function transferEntry(entry, signal, generation) {
   } finally { clearInterval(progressTimer); if (reader) { try { reader.releaseLock(); } catch { /* Reader already released. */ } } }
 }
 async function runQueue() {
-  if (state.running || state.busy || state.exporting) return;
+  if (state.running || state.busy || state.exporting || state.verifying) return;
   // A retry can add a ready file to a previously packaged partial batch.
   invalidateArchive();
   state.running = true;
@@ -747,7 +780,7 @@ function invalidateArchive() {
   $('archive-status').textContent = '';
 }
 async function prepareArchive() {
-  if (state.busy || state.running || state.exporting) return;
+  if (state.busy || state.running || state.exporting || state.verifying) return;
   const entries = state.queue.filter(entry => entry.blob);
   if (!entries.length) return;
   invalidateArchive();
@@ -828,6 +861,8 @@ function suspendPage() {
   state.restoreClearedTray = state.restoreClearedTray || state.queue.length > 0;
   state.controller?.abort();
   state.archiveController?.abort();
+  state.receiptController?.abort();
+  state.receiptController = null; state.verifying = false;
   state.exporting = false;
   invalidateArchive();
   state.requestController.abort();

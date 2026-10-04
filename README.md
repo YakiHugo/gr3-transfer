@@ -110,3 +110,16 @@ unhanded original also requests the browser's normal leave-page warning; browser
 may suppress it, especially on mobile. It is not durable storage. Save explicitly
 and check Downloads/Files before closing the page. A browser handoff suppresses
 repeat warnings but still is not proof that a file reached disk.
+
+### Verify a JPEG without preparing a ZIP
+
+For a ready original, choose **Verify original bytes**, then **Save verification
+receipt**. The JSON receipt contains its camera folder/name, individual download
+filename, byte length and SHA-256 of the retained original. Compare that hash
+with the JPEG you actually saved using an OS checksum tool. Verification reads
+only the bytes already in this tab and does not contact the camera, decode or
+rewrite the JPEG. Cancelling keeps the original. Only one verification runs at
+a time; its temporary hashing buffer can add up to one original's size.
+
+Saving a receipt does not save its JPEG or suppress the unsaved-original warning.
+The receipt cannot prove camera origin or that Downloads contains the file.

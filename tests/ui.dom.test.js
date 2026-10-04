@@ -807,3 +807,26 @@ test('DOM: unsent originals request unload warning; successful individual or ZIP
   h.window.confirm = () => { throw new Error('Already handed ZIP must not ask again'); };
   h.click('#clear-queue'); assert.equal(h.all('.queue-item').length, 0);
 });
+
+test('DOM: standalone verification is two-step, does not request camera or mark the JPEG saved', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer');
+  await until(() => h.$('.queue-item')?.dataset.state === 'ready'); const reads = h.requests.length;
+  h.click('.verify-original'); await until(() => /Save verification receipt/.test(h.$('.verify-original').textContent));
+  assert.equal(h.saved.length, 0); assert.equal(h.requests.length, reads);
+  h.click('.verify-original'); assert.equal(h.saved.length, 1); assert.match(h.saved[0].filename, /receipt\.json$/);
+  const receipt = JSON.parse(await h.saved[0].blob.text()); assert.match(receipt.sha256, /^[0-9a-f]{64}$/);
+  assert.equal(h.$('.queue-item').dataset.state, 'ready');
+  const leave = new h.window.Event('beforeunload', { cancelable: true }); h.window.dispatchEvent(leave); assert.equal(leave.defaultPrevented, true);
+});
+
+test('DOM: cancelling or failing verification preserves the original and permits retry', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer');
+  await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  const helpers = h.window.GRTransferFiles;
+  h.window.GRTransferFiles = { ...helpers, buildReceipt: (_entry, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))) };
+  h.click('.verify-original'); assert.equal(h.$('#build-archive').disabled, true); h.click('.verify-original');
+  await until(() => /Verification cancelled/.test(h.$('.file-verification').textContent));
+  assert.equal(h.$('.queue-item').dataset.state, 'ready'); assert.equal(h.blobs.size, 1);
+  h.window.GRTransferFiles = helpers; h.click('.verify-original');
+  await until(() => /Save verification receipt/.test(h.$('.verify-original').textContent));
+});
