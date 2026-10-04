@@ -840,3 +840,31 @@ test('DOM: cancelling or failing verification preserves the original and permits
   h.window.GRTransferFiles = helpers; h.click('.verify-original');
   await until(() => /Save verification receipt/.test(h.$('.verify-original').textContent));
 });
+
+test('DOM: thumbnail failures retry only their derivative, preserve selection and stop after three attempts', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input');
+  const image = h.$('.photo-image-button img'), source = image.src;
+  const originalCount = h.requests.filter(path => path.endsWith('/original')).length;
+  image.dispatchEvent(new h.window.Event('error'));
+  assert.equal(h.$('.thumbnail-recovery').hidden, false); assert.equal(image.hidden, true);
+  h.click('.thumbnail-recovery button'); assert.equal(image.src, source); assert.match(source, /\/thumbnail\?session=/);
+  assert.equal(h.$('.thumbnail-recovery button').disabled, true);
+  image.dispatchEvent(new h.window.Event('error')); h.click('.thumbnail-recovery button'); image.dispatchEvent(new h.window.Event('error'));
+  assert.equal(h.$('.thumbnail-recovery button').disabled, true);
+  assert.match(h.$('.thumbnail-recovery').textContent, /Try Refresh/);
+  assert.equal(h.$('#selection-count').textContent, '1');
+  assert.equal(h.requests.filter(path => path.endsWith('/original')).length, originalCount);
+  h.change('#sort', 'name-asc'); h.change('#sort', 'name-desc');
+  assert.equal(h.$('.thumbnail-recovery button').disabled, true);
+  assert.equal(h.$('.photo-image-button img').hasAttribute('src'), false);
+});
+
+test('DOM: successful thumbnail retry restores image and detached stale errors cannot affect a new gallery', async t => {
+  const h = await harness(t); await h.demo(); const image = h.$('.photo-image-button img');
+  image.dispatchEvent(new h.window.Event('error')); h.click('.thumbnail-recovery button'); image.dispatchEvent(new h.window.Event('load'));
+  assert.equal(image.hidden, false); assert.equal(h.$('.thumbnail-recovery').hidden, true);
+  h.change('#sort', 'name-asc'); image.dispatchEvent(new h.window.Event('error'));
+  assert.equal(h.all('.thumbnail-recovery').every(node => node.hidden), true);
+  h.click('#refresh'); await until(() => !h.$('#refresh').disabled);
+  assert.equal(h.all('.thumbnail-recovery').every(node => node.hidden), true);
+});

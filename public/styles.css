@@ -23,3 +23,6 @@
 
 .file-verification { margin-top: 8px; }
 .file-verification .save-note { overflow-wrap: anywhere; }
+
+.thumbnail-recovery { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; font-size: .75rem; color: #68472d; }
+.thumbnail-recovery button { min-height: 32px; }

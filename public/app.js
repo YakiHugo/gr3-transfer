@@ -16,6 +16,7 @@ let unloadGuardActive = false;
 const photoNameCollator = new Intl.Collator(undefined, { numeric: true });
 const photoFolderCollator = new Intl.Collator();
 let galleryCache = null;
+const thumbnailFailures = new Map();
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -154,6 +155,7 @@ function renderSession() {
   updateControls();
 }
 function applyPhotos(result) {
+  thumbnailFailures.clear();
   state.photos = (Array.isArray(result.photos) ? result.photos : []).filter(photo => photo && typeof photo.id === 'string').map(photo => ({ ...photo, name: String(photo.name || 'Untitled.JPG'), folder: String(photo.folder || '') }));
   const valid = new Set(state.photos.map(photo => photo.id));
   state.selected = new Set([...state.selected].filter(id => valid.has(id)));
@@ -341,6 +343,41 @@ function renderSelection() {
   }
   updateControls();
 }
+function attachThumbnailRecovery(image, photo, card) {
+  const generation = state.generation;
+  const recovery = element('div', 'thumbnail-recovery');
+  const message = element('span', '', 'Thumbnail unavailable');
+  const retry = element('button', 'text-button', 'Retry thumbnail');
+  retry.type = 'button'; retry.setAttribute('aria-label', `Retry thumbnail for ${photo.name}`);
+  recovery.append(message, retry); recovery.hidden = true;
+  const failed = () => {
+    const record = thumbnailFailures.get(photo.id) || { attempts: 1 };
+    record.failed = true; thumbnailFailures.set(photo.id, record);
+    image.hidden = true; image.alt = `Thumbnail unavailable: ${photo.name}`;
+    recovery.hidden = false; retry.disabled = record.attempts >= 3;
+    message.textContent = record.attempts >= 3 ? 'Thumbnail still unavailable. Try Refresh after checking Wi-Fi.' : 'Thumbnail unavailable';
+  };
+  const request = () => {
+    try { image.removeAttribute('src'); image.src = safeLocalUrl(photo.thumbnailUrl); }
+    catch { failed(); retry.disabled = true; message.textContent = 'Thumbnail URL unavailable. Refresh the contact sheet.'; }
+  };
+  image.addEventListener('error', () => { if (generation === state.generation && image.isConnected) failed(); });
+  image.addEventListener('load', () => {
+    if (generation !== state.generation || !image.isConnected) return;
+    thumbnailFailures.delete(photo.id); recovery.hidden = true; image.hidden = false;
+    image.alt = photo.synthetic ? `Synthetic demo composition: ${photo.name}` : `Preview of ${photo.name}`;
+  });
+  retry.addEventListener('click', () => {
+    if (generation !== state.generation || !image.isConnected || !state.session?.connected) return;
+    const record = thumbnailFailures.get(photo.id);
+    if (!record?.failed || record.attempts >= 3) return;
+    record.attempts++; record.failed = false; retry.disabled = true;
+    message.textContent = 'Retrying thumbnail…'; request();
+  });
+  card.append(recovery);
+  // A rerender must not silently restart an interrupted retry or reset its budget.
+  if (thumbnailFailures.has(photo.id)) failed(); else request();
+}
 function renderGallery() {
   const { list, visible } = currentPage();
   $('gallery').replaceChildren();
@@ -355,8 +392,6 @@ function renderGallery() {
     image.loading = 'lazy';
     image.decoding = 'async';
     image.draggable = false;
-    try { image.src = safeLocalUrl(photo.thumbnailUrl); } catch { image.alt = 'Preview URL unavailable'; }
-    image.addEventListener('error', () => { image.alt = `Preview unavailable: ${photo.name}`; });
     preview.append(image, element('span', 'photo-index', String((state.page - 1) * PAGE_SIZE + index + 1).padStart(2, '0')));
     preview.addEventListener('click', () => showPreview(photo.id));
     const label = element('label', 'photo-select');
@@ -373,6 +408,7 @@ function renderGallery() {
     meta.append(detail, element('span', 'photo-type', photo.synthetic ? 'DEMO / JPG' : 'JPG'));
     card.append(preview, label, meta);
     $('gallery').append(card);
+    attachThumbnailRecovery(image, photo, card);
   });
   $('photo-count').textContent = `${list.length} frame${list.length === 1 ? '' : 's'}${list.length !== state.photos.length ? ` of ${state.photos.length}` : ''}`;
   $('gallery-empty').hidden = list.length !== 0;
@@ -874,6 +910,7 @@ function suspendPage() {
   state.session = null;
   state.photos = [];
   galleryCache = null;
+  thumbnailFailures.clear();
   state.selected.clear();
   state.page = 1;
   for (const dialog of document.querySelectorAll('dialog')) closeDialog(dialog);
