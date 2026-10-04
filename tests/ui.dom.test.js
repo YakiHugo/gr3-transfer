@@ -697,3 +697,21 @@ test('DOM: Escape cancels pending camera connection and allows another attempt',
   assert.equal(h.$('#workspace').hidden, true);
   h.click('#connect-dialog .close-dialog'); await h.demo();
 });
+
+test('DOM: selection review retains hidden selections and deselects only the visible subset', async t => {
+  const h = await harness(t); await h.demo();
+  h.click('#select-visible'); assert.equal(h.$('#selection-count').textContent, '12');
+  h.change('#folder', '100RICOH');
+  assert.match(h.$('#selection-visibility').textContent, /6 selected on this page · 6 elsewhere/);
+  h.click('#selected-only'); assert.equal(h.all('.photo-card').length, 6);
+  h.click('#deselect-visible'); assert.equal(h.$('#selection-count').textContent, '6');
+  assert.equal(h.all('.photo-card').length, 0);
+  assert.match(h.$('#empty-description').textContent, /No selected frames match/);
+  h.click('#reset-filters'); assert.equal(h.all('.photo-card').length, 12);
+  assert.equal(h.$('#selected-only').checked, false);
+  h.click('#selected-only'); assert.equal(h.all('.photo-card').length, 6);
+  h.click('.photo-select input'); assert.equal(h.all('.photo-card').length, 5);
+  h.click('#clear-selection'); assert.equal(h.all('.photo-card').length, 0);
+  assert.equal(h.$('#deselect-visible').disabled, true);
+  assert.equal(h.$('#transfer').disabled, true);
+});

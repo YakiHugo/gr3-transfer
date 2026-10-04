@@ -9,3 +9,8 @@
 .connection-recovery h3 { margin-top: 0; }
 .connection-recovery ol { padding-left: 20px; }
 .connection-recovery li + li { margin-top: 8px; }
+
+.selection-review { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 0 0 20px; font-size: .8rem; }
+.selection-review label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.selection-review input { width: 18px; height: 18px; accent-color: #324c36; }
+.selection-review > span { flex: 1; min-width: 160px; }
