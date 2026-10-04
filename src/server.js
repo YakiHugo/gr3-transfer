@@ -136,20 +136,26 @@ export async function createBridge({ adapter = new CameraAdapter(), fixtureRoot 
       }
       if (req.method === 'GET' && url.pathname === '/api/session') { json(res, 200, session()); return; }
       if (req.method === 'POST' && url.pathname === '/api/connect') {
-        const input = await body(req);
-        if (!['demo', 'camera'].includes(input.mode)) throw new AppError('Choose demo or camera mode.', 'INVALID_MODE', 400);
-        reset();
-        const signal = controller.signal;
-        if (input.mode === 'demo') {
-          state = { mode: 'demo', connected: true, model: 'RICOH GR III · demo', firmware: null, battery: null };
-          assign(fixtures);
-        } else {
-          const result = await adapter.connect(signal);
-          signal.throwIfAborted();
-          state = { mode: 'camera', connected: true, ...result.properties };
-          assign(result.photos);
-        }
-        json(res, 200, session()); return;
+        const local = new AbortController();
+        const abandon = () => { if (!res.writableEnded) local.abort(); };
+        res.once('close', abandon);
+        try {
+          const input = await body(req);
+          local.signal.throwIfAborted();
+          if (!['demo', 'camera'].includes(input.mode)) throw new AppError('Choose demo or camera mode.', 'INVALID_MODE', 400);
+          reset();
+          const signal = AbortSignal.any([controller.signal, local.signal]);
+          if (input.mode === 'demo') {
+            state = { mode: 'demo', connected: true, model: 'RICOH GR III · demo', firmware: null, battery: null };
+            assign(fixtures);
+          } else {
+            const result = await adapter.connect(signal);
+            signal.throwIfAborted();
+            state = { mode: 'camera', connected: true, ...result.properties };
+            assign(result.photos);
+          }
+          json(res, 200, session()); return;
+        } finally { res.off('close', abandon); }
       }
       if (req.method === 'POST' && url.pathname === '/api/disconnect') {
         await body(req); reset(); json(res, 200, session()); return;
