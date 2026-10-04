@@ -8,7 +8,7 @@ const QUEUE_LIMIT = 48;
 const MAX_ATTEMPTS = 3;
 const DOWNLOAD_GRACE_MS = 30000;
 const DOWNLOAD_LEASE_LIMIT = MEMORY_LIMIT + 1024 * 1024;
-const state = { session: null, photos: [], selected: new Set(), page: 1, busy: true, generation: 0, queue: [], running: false, controller: null, previewId: null, retained: 0, requestController: new AbortController(), restoreClearedTray: false, exporting: false, archive: null, archiveController: null, downloadLeases: new Map(), leasedBytes: 0 };
+const state = { session: null, photos: [], selected: new Set(), page: 1, busy: true, connecting: false, generation: 0, queue: [], running: false, controller: null, previewId: null, retained: 0, requestController: new AbortController(), restoreClearedTray: false, exporting: false, archive: null, archiveController: null, downloadLeases: new Map(), leasedBytes: 0 };
 let entryId = 0;
 // Reuse locale collation and one derived list, rather than sorting the whole card
 // again for every selection, preview toggle or page navigation.
@@ -87,6 +87,7 @@ function updateControls() {
   $('retry-unfinished').disabled = blocked || !state.queue.some(canRetry);
   $('cancel-queue').hidden = !state.running;
   $('clear-queue').hidden = state.running;
+  $('cancel-connect').hidden = !state.connecting;
   $('confirm-connect').textContent = state.busy && $('connect-dialog').open ? 'Connecting…' : 'Connect GR III';
   $('refresh').setAttribute('aria-busy', String(state.busy));
 }
@@ -164,6 +165,7 @@ function showConnectionAdvice(code) {
 }
 async function connect(mode) {
   if (state.busy || state.running || state.exporting) return;
+  state.connecting = true;
   setBusy(true);
   const generation = ++state.generation;
   $('connect-error').hidden = true;
@@ -181,6 +183,7 @@ async function connect(mode) {
     applyPhotos(result);
     renderQueue();
     renderSession();
+    state.connecting = false;
     closeDialog($('connect-dialog'));
     $('notice').hidden = true;
     if (mode === 'camera') notify('Camera endpoints responded. This prototype still has not been verified on physical GR III hardware.');
@@ -200,8 +203,31 @@ async function connect(mode) {
     if ($('connect-dialog').open) { $('connect-error').textContent = message; $('connect-error').hidden = false; showConnectionAdvice(error.code); }
     else notify(message, true);
   } finally {
-    if (generation === state.generation) setBusy(false);
+    if (generation === state.generation) { state.connecting = false; setBusy(false); }
   }
+}
+async function cancelConnection() {
+  if (!state.connecting) return;
+  state.connecting = false;
+  const generation = ++state.generation;
+  state.requestController.abort();
+  state.requestController = new AbortController();
+  setBusy(true);
+  try {
+    const session = await post('/api/disconnect');
+    if (generation !== state.generation) return;
+    state.session = session;
+    state.photos = [];
+    galleryCache = null;
+    state.selected.clear();
+    renderGallery(); renderQueue(); renderSession();
+    notify('Connection cancelled. Ready originals are still available to save.');
+  } catch (error) {
+    if (generation !== state.generation) return;
+    state.session = null; state.photos = []; galleryCache = null; state.selected.clear();
+    renderGallery(); renderQueue(); renderSession();
+    notify(`Connection stopped in this tab, but the bridge could not confirm disconnect. Retry the connection before transferring. ${error.message}`, true);
+  } finally { if (generation === state.generation) setBusy(false); }
 }
 async function disconnect() {
   if (state.busy || state.exporting) return;
@@ -356,6 +382,7 @@ function clearPreview() {
   $('preview-image').alt = '';
 }
 function closeDialog(dialog) {
+  if (dialog === $('connect-dialog') && state.connecting) cancelConnection();
   if (dialog === $('preview-dialog')) clearPreview();
   if (dialog.open) dialog.close();
   if (![...document.querySelectorAll('dialog')].some(item => item.open)) document.body.classList.remove('has-modal');
@@ -673,6 +700,7 @@ function saveArchive() {
 
 $('try-demo').addEventListener('click', () => connect('demo'));
 for (const id of ['landing-connect', 'switch-camera']) $(id).addEventListener('click', () => { $('connect-error').hidden = true; openDialog($('connect-dialog')); });
+$('cancel-connect').addEventListener('click', () => closeDialog($('connect-dialog')));
 $('confirm-connect').addEventListener('click', () => connect('camera'));
 $('disconnect').addEventListener('click', disconnect);
 $('refresh').addEventListener('click', refresh);
@@ -693,8 +721,9 @@ $('cancel-archive').addEventListener('click', () => state.archiveController?.abo
 for (const button of document.querySelectorAll('.help-trigger')) button.addEventListener('click', () => showHelp(button.dataset.help));
 for (const button of document.querySelectorAll('.close-dialog')) button.addEventListener('click', () => closeDialog(button.closest('dialog')));
 for (const dialog of document.querySelectorAll('dialog')) {
-  dialog.addEventListener('cancel', () => { if (dialog === $('preview-dialog')) clearPreview(); });
+  dialog.addEventListener('cancel', () => { if (dialog === $('connect-dialog')) cancelConnection(); if (dialog === $('preview-dialog')) clearPreview(); });
   dialog.addEventListener('close', () => {
+    if (dialog === $('connect-dialog') && !dialog.open) cancelConnection();
     if (dialog === $('preview-dialog') && !dialog.open) clearPreview();
     if (![...document.querySelectorAll('dialog')].some(item => item.open)) document.body.classList.remove('has-modal');
   });
@@ -703,6 +732,7 @@ for (const dialog of document.querySelectorAll('dialog')) {
 function suspendPage() {
   // A restored bfcache page must never present revoked object URLs or stale source URLs.
   state.generation++;
+  state.connecting = false;
   state.restoreClearedTray = state.restoreClearedTray || state.queue.length > 0;
   state.controller?.abort();
   state.archiveController?.abort();

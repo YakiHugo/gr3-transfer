@@ -189,3 +189,22 @@ test('new connection wins over an older pending camera handshake', async t => {
   const controller = new AbortController(); controller.abort();
   await assert.rejects(adapter.request('/props', controller.signal, 1), { code: 'CANCELLED' });
 });
+
+test('abandoning an in-flight connection aborts its camera read without a separate disconnect', async t => {
+  let enter, abort;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const aborted = new Promise(resolve => { abort = resolve; });
+  const adapter = { connect: signal => new Promise((resolve, reject) => {
+    enter(); signal.addEventListener('abort', () => { abort(); reject(signal.reason); });
+  }) };
+  const { base, session } = await bridge(t, adapter);
+  const controller = new AbortController();
+  const request = fetch(`${base}/api/connect`, { method: 'POST', signal: controller.signal,
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken, Origin: base }, body: JSON.stringify({ mode: 'camera' }) });
+  const rejection = assert.rejects(request, { name: 'AbortError' });
+  await entered; controller.abort(); await rejection;
+  let timer;
+  try { await Promise.race([aborted, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Camera read not aborted')), 1000); })]); }
+  finally { clearTimeout(timer); }
+  assert.equal((await (await fetch(`${base}/api/session`)).json()).connected, false);
+});

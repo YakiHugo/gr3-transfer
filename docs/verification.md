@@ -121,3 +121,9 @@ success still does not establish physical GR III compatibility, real browser
 rendering, mobile connectivity, or a successful disk/Photos save. Inspect the
 workflow run for the PR's exact final head before merging; a local pass is not
 proof that hosted CI ran.
+
+Connection cancellation: the connection dialog has an explicit Cancel action.
+Close, Escape and backdrop dismissal stop pending work. The bridge aborts a
+camera connection if its requesting browser connection disappears, and ignores
+late camera responses. Cancellation keeps ready JPEGs in the tab; a failed
+bridge-disconnect acknowledgement is reported rather than presented as success.

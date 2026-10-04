@@ -662,3 +662,38 @@ test('DOM: structured connection failures show relevant recovery steps and retry
   await until(() => !h.$('#connect-error').hidden);
   assert.equal(h.cameraCalls(), 0);
 });
+
+test('DOM: closing a pending connection cancels upstream and never resurrects the gallery', async t => {
+  let entered = false, cancelled = false, finish;
+  const h = await harness(t, { adapter: { connect: signal => {
+    entered = true;
+    signal.addEventListener('abort', () => { cancelled = true; });
+    return new Promise(resolve => { finish = () => resolve({ properties: { model: 'RICOH GR III' }, photos: [] }); });
+  } } });
+  await h.demo(); h.click('.photo-select input'); h.click('#transfer');
+  await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  h.click('#switch-camera'); h.click('#confirm-connect');
+  await until(() => entered);
+  assert.equal(h.$('#cancel-connect').hidden, false);
+  h.click('#cancel-connect'); h.click('#cancel-connect');
+  await until(() => !h.$('#try-demo').disabled && cancelled);
+  assert.equal(h.$('#connect-dialog').open, false);
+  assert.equal(h.$('#workspace').hidden, true);
+  assert.equal(h.$('.queue-item').dataset.state, 'ready');
+  finish(); await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(h.$('#workspace').hidden, true);
+  assert.match(h.$('#notice-text').textContent, /Connection cancelled/);
+  await h.demo(); assert.equal(h.$('#workspace').hidden, false);
+});
+
+test('DOM: Escape cancels pending camera connection and allows another attempt', async t => {
+  let entered = false;
+  const h = await harness(t, { adapter: { connect: signal => new Promise((resolve, reject) => {
+    entered = true; signal.addEventListener('abort', () => reject(signal.reason));
+  }) } });
+  h.click('#landing-connect'); h.click('#confirm-connect'); await until(() => entered);
+  h.$('#connect-dialog').dispatchEvent(new h.window.Event('cancel'));
+  await until(() => !h.$('#try-demo').disabled);
+  assert.equal(h.$('#workspace').hidden, true);
+  h.click('#connect-dialog .close-dialog'); await h.demo();
+});
