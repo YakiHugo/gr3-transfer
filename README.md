@@ -32,7 +32,7 @@ Only an exact normalized `RICOH GR III` device identity is accepted. IIIx, IV an
 - Explicit disconnected, synthetic-demo and real-camera modes
 - Read-only Wi-Fi adapter, filename filtering and sequential camera reads
 - Original JPEG transfers without resizing, conversion or EXIF rewriting
-- Per-file progress, cancellation and manual retry; interrupted files are not offered for saving
+- Per-file progress, cancellation and manual retry; **Retry unfinished** recovers eligible failed/cancelled files in one action while keeping ready JPEGs
 - Disconnect during a batch cancels incomplete transfers while keeping completed originals available in this tab
 - Individual saves identify the camera folder; batch ZIPs preserve folder/filename structure and include a SHA-256 manifest
 - Byte-length and incremental JPEG marker validation before a transfer completes
@@ -50,6 +50,8 @@ Original requests use `/v1/photos/{folder}/{filename}` with **no `size` query**.
 Marker validation detects incomplete segments, missing frame/scan markers and false end markers inside EXIF thumbnails. It is not a full entropy decoder, a cryptographic camera-origin guarantee or proof of an actual camera transfer. There is no camera-provided checksum available in the researched API. A 128 MiB per-file limit protects memory/resource use; failed/cancelled transfers restart from the beginning. HTTP Range/resume support is not assumed.
 
 Browser transfer status is local to this tab, not the camera's official transfer flag or a durable backup index. Completed originals survive disconnect and reconnect in the same tab. Clear, closing/reloading the tab, or Back/Forward restoration discards the in-memory tray; save first.
+
+If a batch is interrupted, restore camera Wi-Fi on the bridge computer, then choose **Retry unfinished (N)** in the transfer tray. This explicitly retries both failed and cancelled entries from the current connection; each file restarts from the beginning. Ready JPEGs and files already handed to the browser are kept. The tray shows failed/cancelled counts and explains entries that need another action. Individual **Retry** still retries only that one frame. Each entry has at most three attempts; stale source URLs and older connections are never silently reused. After using Disconnect or switching sources, reconnect and reselect missing frames from the current contact sheet. Retrying invalidates a previously prepared partial ZIP, so prepare a new ZIP after recovery.
 
 Individual JPEG downloads include an unambiguous folder prefix, for example `8-100RICOH__R0000001.JPG`. ZIPs retain `100RICOH/R0000001.JPG`; if the tray contains multiple connection sessions, ZIPs add `source-01/`, `source-02/`, etc. Camera file IDs are scoped to a connection so a new camera/card session does not silently reuse an earlier file. Old interrupted transfers require reconnecting and reselecting the current source file. This prototype does not silently overwrite a chosen filesystem directory or remove anything from the camera.
 

@@ -75,6 +75,7 @@ function updateControls() {
   $('transfer').disabled = blocked || !state.selected.size;
   $('mobile-transfer').disabled = blocked || !state.selected.size;
   $('clear-queue').disabled = blocked;
+  $('retry-unfinished').disabled = blocked || !state.queue.some(canRetry);
   $('cancel-queue').hidden = !state.running;
   $('clear-queue').hidden = state.running;
   $('confirm-connect').textContent = state.busy && $('connect-dialog').open ? 'Connecting…' : 'Connect GR III';
@@ -102,6 +103,8 @@ function placeTray() {
   $('offline-title').textContent = state.queue.some(entry => entry.blob) ? 'Your transferred files are still here.' : 'Transfer stopped.';
 }
 function currentSource(entry) { return state.session?.connected && entry.sourceId === state.session.sessionId; }
+function unfinished(entry) { return ['failed', 'cancelled'].includes(entry.status); }
+function canRetry(entry) { return unfinished(entry) && !entry.blob && currentSource(entry) && entry.attempts < MAX_ATTEMPTS && entry.retryable !== false; }
 function renderSession() {
   const session = state.session;
   const connected = Boolean(session?.connected);
@@ -352,6 +355,7 @@ function showHelp(kind) {
     ['1. Choose and transfer', 'Select JPEGs from the contact sheet, then choose Transfer originals. Files transfer one at a time from the source into browser memory. Progress is measured in bytes; a percentage appears only when the source provides a file size.'],
     ['2. Save originals individually or together', 'Choose Save for a ready JPEG, or prepare a ZIP containing all ready JPEGs, camera folders and a SHA-256 manifest. Individual filenames include a folder prefix. ZIPs keep the original filenames inside directories. Neither method rewrites image bytes or EXIF. Check Downloads or Files: handing a file to the browser does not prove it reached disk.'],
     ['Keep the session small', 'The tray can hold up to 48 entries and 256 MB of file data. Each file is limited to 128 MB. Save and remove files, or clear the tray, before transferring more. Disconnect keeps completed files available in this tab. Clear or closing/reloading this page discards unsaved files from memory.'],
+    ['Recover an interrupted batch', 'Restore the camera Wi-Fi connection on the bridge computer, then choose Retry unfinished to retry eligible failed and cancelled files from this connection. Each file restarts from the beginning; ready JPEGs are kept. Individual Retry only retries that frame. There are at most three attempts per entry. After disconnecting or switching sources, reconnect and reselect files from the current contact sheet instead.'],
     ['A prototype, honestly', 'Demo images are synthetic fixtures. Real Ricoh GR III Wi-Fi transfer has not been tested on physical hardware. The camera must be connected to the bridge computer over Wi-Fi; Bluetooth is not used for original-file transfer.']
   ];
   sections.forEach(([title, body]) => $('help-content').append(element('h3', '', title), element('p', '', body)));
@@ -374,8 +378,8 @@ function itemStatus(entry) {
   if (entry.status === 'transferring') return `${bytes(entry.received)}${knownSize(entry.expected) ? ` / ${bytes(entry.expected)}` : ' transferred · size unknown'}`;
   if (entry.status === 'ready') return `${bytes(entry.blobBytes)} · ready to save`;
   if (entry.status === 'handed-off') return 'Sent to browser · check Downloads';
-  if (['cancelled', 'failed'].includes(entry.status) && !currentSource(entry)) return 'Source disconnected or changed · reconnect and reselect this frame';
-  if (entry.status === 'cancelled') return 'Cancelled · no file saved';
+  if (unfinished(entry) && !currentSource(entry)) return 'Source disconnected or changed · reconnect and reselect this frame';
+  if (entry.status === 'cancelled') return `Cancelled · no file saved${entry.attempts >= MAX_ATTEMPTS ? ' · Retry limit reached; remove and reselect after checking the connection.' : ''}`;
   return entry.error || 'Transfer failed · no file saved';
 }
 function renderQueue() {
@@ -399,11 +403,11 @@ function renderQueue() {
       const save = element('button', 'button secondary', entry.status === 'ready' ? 'Save' : 'Save again');
       save.type = 'button'; save.setAttribute('aria-label', `Save ${entry.photo.name}`);
       save.addEventListener('click', () => saveEntry(entry)); top.append(save);
-    } else if (['failed', 'cancelled'].includes(entry.status) && entry.attempts < MAX_ATTEMPTS && currentSource(entry) && entry.retryable !== false) {
+    } else if (canRetry(entry)) {
       const retry = element('button', 'button secondary', 'Retry');
       retry.type = 'button'; retry.disabled = state.running || state.busy || state.exporting;
       retry.setAttribute('aria-label', `Retry ${entry.photo.name}`);
-      retry.addEventListener('click', () => { if (state.running || state.busy || state.exporting || !currentSource(entry)) return; entry.status = 'queued'; entry.error = ''; entry.received = 0; entry.expected = knownSize(entry.photo.bytes) ? entry.photo.bytes : null; renderQueue(); runQueue(); });
+      retry.addEventListener('click', () => retryEntries([entry]));
       top.append(retry);
     }
     row.append(top);
@@ -422,6 +426,7 @@ function renderQueue() {
     $('queue-list').append(row);
   });
   updateQueueSummary();
+  renderRecovery();
   placeTray();
   updateControls();
 }
@@ -430,8 +435,41 @@ function updateQueueSummary() {
   const ready = state.queue.filter(entry => entry.status === 'ready').length;
   const handed = state.queue.filter(entry => entry.status === 'handed-off').length;
   const failed = state.queue.filter(entry => entry.status === 'failed').length;
-  const active = state.running ? 'Transferring one file at a time' : ready ? `${ready} ready to save` : handed ? `${handed} handed to browser` : 'No active transfers';
-  $('queue-summary').textContent = `${active}${failed ? ` · ${failed} failed` : ''}`;
+  const cancelled = state.queue.filter(entry => entry.status === 'cancelled').length;
+  const waiting = state.queue.filter(entry => entry.status === 'queued').length;
+  const parts = [state.running && 'Transferring one file at a time', ready && `${ready} ready to save`, handed && `${handed} handed to browser`, waiting && `${waiting} waiting`, failed && `${failed} failed`, cancelled && `${cancelled} cancelled`].filter(Boolean);
+  $('queue-summary').textContent = parts.join(' · ') || 'No active transfers';
+}
+function renderRecovery() {
+  const stopped = state.queue.filter(unfinished);
+  const eligible = stopped.filter(canRetry);
+  $('queue-recovery').hidden = !stopped.length || state.running;
+  $('retry-unfinished').hidden = !eligible.length;
+  $('retry-unfinished').textContent = `Retry unfinished (${eligible.length})`;
+  const notes = [];
+  if (eligible.length) {
+    if (state.session?.mode === 'camera') notes.push('Restore camera Wi-Fi first.');
+    notes.push('Retry failed and cancelled files from this connection, from the beginning. Ready JPEGs are kept.');
+  }
+  const stale = stopped.filter(entry => !currentSource(entry)).length;
+  const expired = stopped.filter(entry => currentSource(entry) && entry.retryable === false).length;
+  const exhausted = stopped.filter(entry => currentSource(entry) && entry.retryable !== false && entry.attempts >= MAX_ATTEMPTS).length;
+  if (stale) notes.push(`${stale} from a disconnected or changed source: reconnect and reselect from the contact sheet.`);
+  if (expired) notes.push(`${expired} no longer available through this connection: reconnect and reselect from the contact sheet.`);
+  if (exhausted) notes.push(`${exhausted} reached the ${MAX_ATTEMPTS}-attempt limit: check the connection, then remove and reselect those frames.`);
+  $('recovery-note').textContent = notes.join(' ');
+}
+function retryEntries(entries) {
+  if (state.running || state.busy || state.exporting) return;
+  // Recheck membership and source at click time, including old detached buttons.
+  const eligible = entries.filter(entry => state.queue.includes(entry) && canRetry(entry));
+  if (!eligible.length) return;
+  eligible.forEach(entry => {
+    entry.status = 'queued'; entry.error = ''; entry.received = 0;
+    entry.expected = knownSize(entry.photo.bytes) ? entry.photo.bytes : null;
+  });
+  // runQueue invalidates any partial ZIP and sets the running guard synchronously.
+  runQueue();
 }
 function updateEntryProgress(entry) {
   const row = $(`queue-${entry.id}`);
@@ -441,7 +479,7 @@ function updateEntryProgress(entry) {
   if (progress && knownSize(entry.expected) && entry.expected > 0) { progress.max = entry.expected; progress.value = entry.received; }
 }
 async function transferEntry(entry, signal, generation) {
-  entry.attempts++;
+  const attempt = ++entry.attempts;
   entry.status = 'transferring'; entry.received = 0; entry.error = ''; entry.retryable = true;
   entry.expected = knownSize(entry.photo.bytes) ? entry.photo.bytes : null;
   renderQueue();
@@ -493,6 +531,9 @@ async function transferEntry(entry, signal, generation) {
   } catch (error) {
     if (reader) { try { await reader.cancel(); } catch { /* Already aborted or closed. */ } }
     else if (response?.body) { try { await response.body.cancel(); } catch { /* Response already consumed. */ } }
+    // Disconnect can finish before abort cleanup. An old attempt must not overwrite
+    // a ready file produced by a subsequent retry if the disconnect request failed.
+    if (generation !== state.generation || attempt !== entry.attempts) return;
     entry.status = signal.aborted || error.name === 'AbortError' ? 'cancelled' : 'failed';
     entry.error = entry.status === 'failed' ? `${error.message || 'Connection interrupted. No file was prepared.'}${entry.attempts >= MAX_ATTEMPTS ? ' Retry limit reached; remove and reselect after checking the connection.' : ''}` : '';
   } finally { if (reader) { try { reader.releaseLock(); } catch { /* Reader already released. */ } } }
@@ -612,6 +653,7 @@ $('transfer').addEventListener('click', addToQueue);
 $('mobile-transfer').addEventListener('click', () => { addToQueue(); if (state.queue.length) $('queue-panel').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' }); });
 $('cancel-queue').addEventListener('click', cancelQueue);
 $('clear-queue').addEventListener('click', clearQueue);
+$('retry-unfinished').addEventListener('click', () => retryEntries(state.queue));
 $('build-archive').addEventListener('click', prepareArchive);
 $('save-archive').addEventListener('click', saveArchive);
 $('cancel-archive').addEventListener('click', () => state.archiveController?.abort());
