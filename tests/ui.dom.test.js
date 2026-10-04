@@ -733,3 +733,27 @@ test('DOM: preview previous/next and arrow keys follow filtered order without ch
   assert.equal(h.$('#preview-previous').disabled, true); assert.equal(h.$('#preview-next').disabled, true);
   h.click('.preview-close'); assert.equal(h.$('#preview-image').hasAttribute('src'), false);
 });
+
+test('DOM: transfer preflight blocks known over-budget batches before requesting originals', async t => {
+  for (const sizes of [[129 * 1024 * 1024], [100 * 1024 * 1024, 100 * 1024 * 1024, 100 * 1024 * 1024]]) {
+    const h = await harness(t, { intercept: async url => url.pathname === '/api/photos' ? Response.json({ photos: sizes.map((bytes, i) => ({ id: String(i), name: `R${i}.JPG`, folder: '100RICOH', bytes, thumbnailUrl: '/missing', originalUrl: '/missing/original' })) }) : undefined });
+    await h.demo(); h.click('#select-visible');
+    assert.equal(h.$('#transfer-plan').classList.contains('blocked'), true);
+    h.click('#transfer');
+    assert.match(h.$('#notice-text').textContent, /exceeds/);
+    assert.equal(h.requests.some(path => path.endsWith('/original')), false);
+    assert.equal(h.all('.queue-item').length, 0);
+  }
+});
+
+test('DOM: transfer preflight exposes unknown sizes without guessing and excludes duplicates', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input');
+  assert.match(h.$('#transfer-plan').textContent, /1 new originals/);
+  h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  assert.match(h.$('#transfer-plan').textContent, /1 already in tray; skipped/);
+  assert.doesNotMatch(h.$('#transfer-plan').textContent, /1 new originals/);
+  const other = await harness(t, { intercept: async url => url.pathname === '/api/photos' ? Response.json({ photos: [{ id: 'unknown', name: 'R1.JPG', folder: '100RICOH', bytes: null, thumbnailUrl: '/missing', originalUrl: '/missing/original' }] }) : undefined });
+  await other.demo(); other.click('#select-visible');
+  assert.match(other.$('#transfer-plan').textContent, /1 unknown sizes/);
+  assert.equal(other.$('#transfer-plan').classList.contains('blocked'), false);
+});

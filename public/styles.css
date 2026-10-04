@@ -17,3 +17,6 @@
 
 .preview-navigation { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 24px; font-size: .8rem; }
 .preview-navigation > span { text-align: center; }
+
+.transfer-plan { font-size: .75rem; line-height: 1.6; color: #596553; margin: 14px 0 0; }
+.transfer-plan.blocked { color: #8a341e; border-left: 3px solid currentColor; padding-left: 10px; }
