@@ -18,7 +18,7 @@ async function until(predicate, message = 'UI state did not settle') {
   const start = Date.now();
   while (!predicate()) { if (Date.now() - start > 2000) throw new Error(message); await new Promise(resolve => setTimeout(resolve, 5)); }
 }
-async function harness(t, { intercept, adapter } = {}) {
+async function harness(t, { intercept, adapter, setup } = {}) {
   let cameraCalls = 0;
   const server = await createBridge({ adapter: adapter || { connect: async () => { cameraCalls++; throw new AppError('Synthetic offline camera. Join camera Wi-Fi and retry.', 'CAMERA_UNREACHABLE', 503); } } });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
@@ -46,6 +46,7 @@ async function harness(t, { intercept, adapter } = {}) {
     if (handled) return handled;
     return fetch(url, { ...options, headers: { ...options.headers, Origin: base } });
   };
+  setup?.(window);
   window.eval(fileHelpers);
   window.eval(app);
   const $ = selector => window.document.querySelector(selector);
@@ -772,15 +773,24 @@ test('DOM: transfer pace reports measured averages and only estimates known rema
 });
 
 test('DOM: elapsed progress keeps updating while a read is stalled and cancellation removes it', async t => {
-  let started;
-  const h = await harness(t, { intercept: async (url, opts) => url.pathname.endsWith('/original') ? new Response(new ReadableStream({ start(c) {
+  let started, clock = 0, timerId = 0;
+  const timers = new Map();
+  const h = await harness(t, { setup: window => {
+    Object.defineProperty(window.performance, 'now', { value: () => clock });
+    window.setInterval = callback => { timers.set(++timerId, callback); return timerId; };
+    window.clearInterval = id => timers.delete(id);
+  }, intercept: async (url, opts) => url.pathname.endsWith('/original') ? new Response(new ReadableStream({ start(c) {
     started = true; c.enqueue(original.subarray(0, 20)); opts.signal.addEventListener('abort', () => c.error(new DOMException('cancelled', 'AbortError')));
   } }), { headers: { 'Content-Type': 'image/jpeg' } }) : undefined });
   await h.demo(); h.click('.photo-select input'); h.click('#transfer'); await until(() => started);
-  await until(() => /1s elapsed/.test(h.$('.queue-item-status').textContent));
+  assert.equal(timers.size, 1);
+  clock = 2000;
+  await until(() => { [...timers.values()].forEach(tick => tick()); return /20 B/.test(h.$('.queue-item-status').textContent); });
+  assert.match(h.$('.queue-item-status').textContent, /2s elapsed/);
   assert.match(h.$('.queue-item-status').textContent, /average/);
   h.click('#cancel-queue'); await until(() => h.$('.queue-item')?.dataset.state === 'cancelled');
   assert.doesNotMatch(h.$('.queue-item-status').textContent, /elapsed/);
+  assert.equal(timers.size, 0);
 });
 
 test('DOM: declining discard keeps ready originals and archive; acceptance releases them', async t => {
@@ -806,4 +816,27 @@ test('DOM: unsent originals request unload warning; successful individual or ZIP
   assert.equal(after.defaultPrevented, false);
   h.window.confirm = () => { throw new Error('Already handed ZIP must not ask again'); };
   h.click('#clear-queue'); assert.equal(h.all('.queue-item').length, 0);
+});
+
+test('DOM: standalone verification is two-step, does not request camera or mark the JPEG saved', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer');
+  await until(() => h.$('.queue-item')?.dataset.state === 'ready'); const reads = h.requests.length;
+  h.click('.verify-original'); await until(() => /Save verification receipt/.test(h.$('.verify-original').textContent));
+  assert.equal(h.saved.length, 0); assert.equal(h.requests.length, reads);
+  h.click('.verify-original'); assert.equal(h.saved.length, 1); assert.match(h.saved[0].filename, /receipt\.json$/);
+  const receipt = JSON.parse(await h.saved[0].blob.text()); assert.match(receipt.sha256, /^[0-9a-f]{64}$/);
+  assert.equal(h.$('.queue-item').dataset.state, 'ready');
+  const leave = new h.window.Event('beforeunload', { cancelable: true }); h.window.dispatchEvent(leave); assert.equal(leave.defaultPrevented, true);
+});
+
+test('DOM: cancelling or failing verification preserves the original and permits retry', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer');
+  await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  const helpers = h.window.GRTransferFiles;
+  h.window.GRTransferFiles = { ...helpers, buildReceipt: (_entry, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))) };
+  h.click('.verify-original'); assert.equal(h.$('#build-archive').disabled, true); h.click('.verify-original');
+  await until(() => /Verification cancelled/.test(h.$('.file-verification').textContent));
+  assert.equal(h.$('.queue-item').dataset.state, 'ready'); assert.equal(h.blobs.size, 1);
+  h.window.GRTransferFiles = helpers; h.click('.verify-original');
+  await until(() => /Save verification receipt/.test(h.$('.verify-original').textContent));
 });

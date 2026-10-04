@@ -108,3 +108,17 @@ test('files: large-file CRC work yields so cancellation interrupts preparation b
   await assert.rejects(cancellableContext.GRTransferFiles.buildArchive([entry({ blob: large })], { signal: controller.signal }), e => e.name === 'AbortError');
   assert.equal(yields, 1); assert.equal(large.size, image.length + 2 * 1024 * 1024);
 });
+
+test('standalone receipt hashes retained originals without an archive or byte transformations', async () => {
+  const e = entry();
+  const result = await context.GRTransferFiles.buildReceipt(e, { createdAt: new Date('2026-10-04T00:00:00Z') });
+  assert.equal(result.receipt.sha256, hash(image)); assert.equal(result.receipt.bytes, image.length);
+  assert.equal(result.receipt.downloadFilename, downloadName(e.photo));
+  assert.equal(result.filename, `${downloadName(e.photo)}.receipt.json`);
+  assert.equal(JSON.parse(await result.blob.text()).sha256, hash(image));
+  assert.deepEqual(Buffer.from(await e.blob.arrayBuffer()), image);
+  assert.match(result.receipt.checksumScope, /not an independent camera checksum/);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(context.GRTransferFiles.buildReceipt(e, { signal: controller.signal }), { name: 'AbortError' });
+  await assert.rejects(context.GRTransferFiles.buildReceipt(entry({ blob: new Blob([]) })), /retained original/);
+});

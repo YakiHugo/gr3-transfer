@@ -53,6 +53,26 @@
     c.setUint32(16, crc, true); c.setUint32(20, blob.size, true); c.setUint32(24, blob.size, true); c.setUint16(28, name.length, true); c.setUint32(42, offset, true); central.bytes.set(name, 46);
     return { parts: [local.bytes, blob], central: central.bytes, size: local.bytes.length + blob.size };
   }
+  async function buildReceipt(entry, { signal, createdAt = new Date() } = {}) {
+    signal?.throwIfAborted();
+    const [folder, name] = components(entry.photo);
+    if (!entry.blob || entry.blob.type !== 'image/jpeg' || !entry.blob.size || entry.blob.size > 128 * 1024 * 1024) throw new Error('A retained original JPEG is required for verification.');
+    if (!root.crypto?.subtle) throw new Error('Checksum support is unavailable. The original can still be saved.');
+    if (!Number.isFinite(createdAt.getTime())) throw new Error('Invalid receipt date.');
+    const bytes = await entry.blob.arrayBuffer();
+    signal?.throwIfAborted();
+    const digest = await root.crypto.subtle.digest('SHA-256', bytes);
+    signal?.throwIfAborted();
+    const receipt = {
+      formatVersion: 1, createdAt: createdAt.toISOString(),
+      checksumScope: 'Retained browser JPEG bytes; not an independent camera checksum or proof of saving to disk.',
+      transformation: 'none', cameraFolder: folder, cameraFilename: name,
+      downloadFilename: downloadName(entry.photo), bytes: entry.blob.size,
+      sha256: [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join(''),
+      source: { mode: entry.sourceMode === 'camera' ? 'camera' : 'demo', hardwareVerified: false },
+    };
+    return { receipt, blob: new Blob([`${JSON.stringify(receipt, null, 2)}\n`], { type: 'application/json' }), filename: `${downloadName(entry.photo)}.receipt.json` };
+  }
   async function buildArchive(entries, { signal, createdAt = new Date(), onProgress = () => {} } = {}) {
     signal?.throwIfAborted();
     if (!entries.length) throw new Error('Transfer at least one JPEG before creating an archive.');
@@ -94,5 +114,5 @@
     signal?.throwIfAborted();
     return { blob: new Blob([...parts, ...central, end.bytes], { type: 'application/zip' }), filename: `gr3-originals-${createdAt.toISOString().replace(/[-:]/g, '').slice(0, 15)}.zip`, manifest };
   }
-  root.GRTransferFiles = Object.freeze({ downloadName, buildArchive, crc32 });
+  root.GRTransferFiles = Object.freeze({ downloadName, buildArchive, buildReceipt, crc32 });
 })(globalThis);
