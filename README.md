@@ -100,3 +100,13 @@ The adapter was independently written using these read-only references, research
 - [Requested feasibility reference](https://github.com/Nielk74/ricoh-gr3-android/blob/main/research/FEASIBILITY.md): orientation and references, not hardware validation of this prototype
 
 The unofficial protocol may differ by firmware. No external repository code was executed. Photo transfers use Wi-Fi, not Bluetooth. List pagination is not guessed: this version requests the full directory listing and filters JPEGs locally; the published `after` field is a date-time filter, not a verified filename cursor.
+
+### Protecting unsaved originals
+
+Clear and Remove ask before discarding retained originals that have not been
+handed to the browser individually or in a saved ZIP. Cancelling that prompt
+preserves both the files and any prepared archive. An active transfer or retained
+unhanded original also requests the browser's normal leave-page warning; browsers
+may suppress it, especially on mobile. It is not durable storage. Save explicitly
+and check Downloads/Files before closing the page. A browser handoff suppresses
+repeat warnings but still is not proof that a file reached disk.

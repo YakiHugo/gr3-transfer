@@ -27,6 +27,8 @@ async function harness(t, { intercept, adapter } = {}) {
   window.document.write(html);
   // happy-dom lacks the browser's Option constructor. Supply its DOM-equivalent.
   window.Option = function(text, value) { const node = window.document.createElement('option'); node.textContent = text; node.value = value; return node; };
+  // Existing cleanup tests explicitly accept discard; guard-specific tests override this decision.
+  window.confirm = () => true;
   window.AbortController = AbortController;
   window.DOMException = DOMException;
   window.Blob = Blob;
@@ -779,4 +781,29 @@ test('DOM: elapsed progress keeps updating while a read is stalled and cancellat
   assert.match(h.$('.queue-item-status').textContent, /average/);
   h.click('#cancel-queue'); await until(() => h.$('.queue-item')?.dataset.state === 'cancelled');
   assert.doesNotMatch(h.$('.queue-item-status').textContent, /elapsed/);
+});
+
+test('DOM: declining discard keeps ready originals and archive; acceptance releases them', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer');
+  await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
+  const prompts = []; h.window.confirm = message => { prompts.push(message); return false; };
+  h.click('#clear-queue'); h.click('.queue-remove');
+  assert.equal(h.blobs.size, 2); assert.equal(h.all('.queue-item').length, 1);
+  assert.equal(h.$('#save-archive').hidden, false); assert.equal(prompts.length, 2);
+  assert.match(prompts[0], /not yet sent to your browser/);
+  h.window.confirm = () => true; h.click('.queue-remove'); assert.equal(h.blobs.size, 0);
+});
+
+test('DOM: unsent originals request unload warning; successful individual or ZIP handoff removes it', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer');
+  await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  const warning = new h.window.Event('beforeunload', { cancelable: true }); h.window.dispatchEvent(warning);
+  assert.equal(warning.defaultPrevented, true);
+  h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
+  h.click('#save-archive');
+  const after = new h.window.Event('beforeunload', { cancelable: true }); h.window.dispatchEvent(after);
+  assert.equal(after.defaultPrevented, false);
+  h.window.confirm = () => { throw new Error('Already handed ZIP must not ask again'); };
+  h.click('#clear-queue'); assert.equal(h.all('.queue-item').length, 0);
 });
