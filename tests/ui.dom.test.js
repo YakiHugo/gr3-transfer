@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Window } from 'happy-dom';
 import { createBridge } from '../src/server.js';
-import { AppError } from '../src/camera.js';
+import { AppError, CameraAdapter } from '../src/camera.js';
 
 const html = (await readFile(new URL('../public/index.html', import.meta.url), 'utf8')).replace(/<script[^>]*>[\s\S]*?<\/script>/g, '').replace(/<link[^>]*>/g, '');
 const fileHelpers = await readFile(new URL('../public/transfer-files.js', import.meta.url), 'utf8');
@@ -18,9 +18,9 @@ async function until(predicate, message = 'UI state did not settle') {
   const start = Date.now();
   while (!predicate()) { if (Date.now() - start > 2000) throw new Error(message); await new Promise(resolve => setTimeout(resolve, 5)); }
 }
-async function harness(t, { intercept } = {}) {
+async function harness(t, { intercept, adapter } = {}) {
   let cameraCalls = 0;
-  const server = await createBridge({ adapter: { connect: async () => { cameraCalls++; throw new AppError('Synthetic offline camera. Join camera Wi-Fi and retry.', 'CAMERA_UNREACHABLE', 503); } } });
+  const server = await createBridge({ adapter: adapter || { connect: async () => { cameraCalls++; throw new AppError('Synthetic offline camera. Join camera Wi-Fi and retry.', 'CAMERA_UNREACHABLE', 503); } } });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const base = `http://127.0.0.1:${server.address().port}`;
   const window = new Window({ url: base });
@@ -393,4 +393,234 @@ test('DOM: archive allocation failure leaves originals intact and allows packagi
   assert.equal(h.blobs.size, 1); assert.equal(h.$('#save-archive').hidden, true); assert.equal(h.$('#build-archive').disabled, false);
   h.window.URL.createObjectURL = create; h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
   assert.equal(h.blobs.size, 2);
+});
+
+test('DOM: one-click batch retry restores cancelled remainder, keeps ready bytes and rejects duplicate clicks', async t => {
+  const reads = new Map();
+  let interruptedUrl;
+  const h = await harness(t, { intercept: async (url, opts) => {
+    if (!url.pathname.endsWith('/original')) return;
+    const count = (reads.get(url.href) || 0) + 1; reads.set(url.href, count);
+    if (reads.size === 2 && count === 1) {
+      interruptedUrl = url.href;
+      return new Response(new ReadableStream({ start(c) {
+        c.enqueue(original.subarray(0, 30));
+        opts.signal.addEventListener('abort', () => c.error(new DOMException('cancelled', 'AbortError')));
+      } }), { headers: { 'Content-Type': 'image/jpeg' } });
+    }
+  }});
+  await h.demo(); h.click('#select-visible'); h.click('#transfer');
+  await until(() => interruptedUrl && h.all('.queue-item[data-state="ready"]').length === 1);
+  const readyBlob = [...h.blobs.values()][0];
+  h.click('#cancel-queue'); await until(() => !h.$('#retry-unfinished').disabled);
+  assert.equal(h.all('.queue-item[data-state="cancelled"]').length, 11);
+  assert.match(h.$('#queue-summary').textContent, /1 ready to save.*11 cancelled/);
+  assert.equal(h.$('#retry-unfinished').textContent, 'Retry unfinished (11)');
+  assert.match(h.$('#recovery-note').textContent, /failed and cancelled.*from the beginning.*Ready JPEGs are kept/);
+  const button = h.$('#retry-unfinished'); button.click();
+  // Dispatch bypasses native disabled-button click suppression to test the running guard too.
+  button.dispatchEvent(new h.window.Event('click'));
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 12 && !h.$('#build-archive').disabled);
+  assert.equal(reads.size, 12); assert.equal([...reads.values()].reduce((sum, n) => sum + n, 0), 13);
+  assert.equal(reads.get(interruptedUrl), 2);
+  assert.ok([...h.blobs.values()].includes(readyBlob), 'Completed JPEG Blob is retained, not downloaded again');
+  assert.equal(h.$('#queue-recovery').hidden, true); assert.equal(h.$('#retry-unfinished').disabled, true);
+  assert.equal(h.$('#queue-summary').textContent, '12 ready to save');
+  for (const save of h.all('.queue-item-top button')) save.click();
+  assert.equal(h.saved.length, 12);
+  for (const saved of h.saved) {
+    const photo = manifest.find(photo => saved.filename.endsWith(photo.folder + '__' + photo.name));
+    assert.ok(photo);
+    assert.deepEqual(Buffer.from(await saved.blob.arrayBuffer()), await readFile(new URL('../fixtures/' + photo.id + '.jpg', import.meta.url)));
+  }
+});
+
+test('DOM: batch retry excludes old sessions, stale responses and exhausted entries in a mixed tray', async t => {
+  let phase = 'old';
+  const reads = new Map();
+  const h = await harness(t, { intercept: async url => {
+    if (!url.pathname.endsWith('/original')) return;
+    const key = `${phase}:${url.pathname}`;
+    const count = (reads.get(key) || 0) + 1; reads.set(key, count);
+    if (phase === 'old' || url.pathname.includes(manifest[0].id) || (url.pathname.includes(manifest[1].id) && count === 1)) return Response.json({ error: 'Synthetic interrupted read' }, { status: 503 });
+    if (url.pathname.includes(manifest[2].id)) return Response.json({ error: 'Synthetic stale URL', code: 'STALE_SESSION' }, { status: 409 });
+  }});
+  await h.demo(); h.change('#sort', 'name-asc'); h.click('.photo-select input'); h.click('#transfer');
+  await until(() => !h.$('#retry-unfinished').disabled);
+  const oldRetry = h.$('#queue-1 button[aria-label^="Retry"]');
+  h.click('#disconnect'); await until(() => !h.$('#landing').hidden && !h.$('#disconnect').disabled);
+  assert.equal(h.$('#retry-unfinished').hidden, true); assert.equal(h.$('#retry-unfinished').disabled, true);
+  phase = 'current'; await h.demo(); h.change('#folder', '100RICOH'); h.click('#select-visible'); h.click('#transfer');
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 3 && !h.$('#build-archive').disabled);
+  const exhaustedRetry = h.$('#queue-2 button[aria-label^="Retry"]');
+  for (let attempt = 2; attempt <= 3; attempt++) {
+    h.click('#queue-2 button[aria-label^="Retry"]');
+    await until(() => h.$('#queue-2').dataset.state === 'failed' && !h.$('#build-archive').disabled);
+  }
+  assert.equal(h.$('#retry-unfinished').textContent, 'Retry unfinished (1)');
+  assert.match(h.$('#recovery-note').textContent, /1 from a disconnected or changed source/);
+  assert.match(h.$('#recovery-note').textContent, /1 no longer available through this connection/);
+  assert.match(h.$('#recovery-note').textContent, /1 reached the 3-attempt limit/);
+  const before = new Map(reads);
+  oldRetry.click(); exhaustedRetry.click();
+  assert.deepEqual(reads, before, 'Detached individual retry controls cannot revive stale or exhausted entries');
+  h.click('#retry-unfinished'); await until(() => h.all('.queue-item[data-state="ready"]').length === 4 && !h.$('#build-archive').disabled);
+  for (const [key, count] of reads) assert.equal(count, before.get(key) + (key.includes(manifest[1].id) ? 1 : 0));
+  assert.equal(h.all('.queue-item[data-state="failed"]').length, 3);
+  assert.equal(h.$('#retry-unfinished').hidden, true); assert.equal(h.$('#retry-unfinished').disabled, true);
+  assert.equal(h.$('#queue-recovery').hidden, false);
+});
+
+test('DOM: batch retry invalidates partial ZIP and preserves already handed-off JPEGs', async t => {
+  let reads = 0;
+  const h = await harness(t, { intercept: async url => {
+    if (url.pathname.endsWith('/original') && [2, 4].includes(++reads)) return Response.json({ error: 'Synthetic transient failure' }, { status: 503 });
+  }});
+  await h.demo(); h.change('#folder', '100RICOH'); h.click('#select-visible'); h.click('#transfer');
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 4 && !h.$('#build-archive').disabled);
+  h.click('.queue-item[data-state="ready"] .queue-item-top button'); const saved = h.saved[0].blob;
+  assert.match(h.$('#queue-summary').textContent, /3 ready to save.*1 handed to browser.*2 failed/);
+  h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
+  const oldZip = [...h.blobs.entries()].find(([, blob]) => blob.type === 'application/zip')[0];
+  assert.match(h.$('#archive-status').textContent, /4 original JPEGs/);
+  h.click('#retry-unfinished'); assert.equal(h.$('#save-archive').hidden, true); assert.ok(h.revoked.includes(oldZip));
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 5 && !h.$('#build-archive').disabled);
+  assert.equal(reads, 8); assert.equal(h.all('.queue-item[data-state="handed-off"]').length, 1);
+  assert.ok([...h.blobs.values()].includes(saved));
+  h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
+  assert.match(h.$('#archive-status').textContent, /6 original JPEGs/);
+});
+
+test('DOM: retry recovery is disabled during ZIP preparation and clearing removes recovery controls', async t => {
+  let reads = 0;
+  const h = await harness(t, { intercept: async url => {
+    if (url.pathname.endsWith('/original') && ++reads === 2) return Response.json({ error: 'Synthetic transient failure' }, { status: 503 });
+  }});
+  await h.demo(); h.change('#folder', '100RICOH'); h.click('#select-visible'); h.click('#transfer');
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 5 && !h.$('#build-archive').disabled);
+  const button = h.$('#retry-unfinished');
+  h.window.GRTransferFiles = { ...h.window.GRTransferFiles, buildArchive: (_entries, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')))) };
+  h.click('#build-archive'); assert.equal(button.disabled, true);
+  button.dispatchEvent(new h.window.Event('click')); assert.equal(reads, 6);
+  h.click('#cancel-archive'); await until(() => !button.disabled);
+  h.click('#clear-queue'); assert.equal(h.$('#queue-recovery').hidden, true); assert.equal(button.hidden, true); assert.equal(button.disabled, true);
+  button.dispatchEvent(new h.window.Event('click')); assert.equal(reads, 6); assert.equal(h.blobs.size, 0);
+});
+
+test('DOM: repeated cancellation respects the three-attempt cap and leaves unattempted frames retryable', async t => {
+  let reads = 0;
+  const h = await harness(t, { intercept: async (url, opts) => {
+    if (!url.pathname.endsWith('/original')) return;
+    reads++;
+    return new Response(new ReadableStream({ start(c) {
+      c.enqueue(original.subarray(0, 30));
+      opts.signal.addEventListener('abort', () => c.error(new DOMException('cancelled', 'AbortError')));
+    } }), { headers: { 'Content-Type': 'image/jpeg' } });
+  }});
+  await h.demo(); h.click('#select-visible'); h.click('#transfer');
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await until(() => reads === attempt && !h.$('#cancel-queue').disabled);
+    h.click('#cancel-queue'); await until(() => h.all('.queue-item[data-state="cancelled"]').length === 12 && !h.$('#retry-unfinished').disabled);
+    if (attempt < 3) h.click('#retry-unfinished');
+  }
+  assert.equal(h.$('#retry-unfinished').textContent, 'Retry unfinished (11)');
+  assert.equal(h.$('#queue-1 button[aria-label^="Retry"]'), null);
+  assert.match(h.$('#queue-1 .queue-item-status').textContent, /Retry limit reached/);
+  assert.match(h.$('#recovery-note').textContent, /1 reached the 3-attempt limit/);
+  assert.equal(reads, 3); assert.equal(h.blobs.size, 0);
+});
+
+test('DOM: synthetic camera-protocol interruption recovers only missing originals with unchanged JPEG bytes', async t => {
+  const calls = [], reads = new Map();
+  const photos = manifest.slice(0, 3);
+  const adapter = new CameraAdapter({ fetchImpl: async (input, options) => {
+    const url = new URL(input); calls.push({ path: url.pathname + url.search, method: options.method });
+    if (url.pathname === '/v1/props') return Response.json({ model: 'RICOH GR III', firmwareVersion: 'synthetic' });
+    if (url.pathname === '/v1/photos') return Response.json({ dirs: [{ name: '100RICOH', files: photos.map(photo => photo.name) }] });
+    const photo = photos.find(photo => url.pathname === `/v1/photos/${photo.folder}/${photo.name}`);
+    assert.ok(photo, 'Synthetic adapter rejects unrecognized paths');
+    assert.equal(url.search, '', 'Recovered originals cannot use a resized variant');
+    const count = (reads.get(photo.id) || 0) + 1; reads.set(photo.id, count);
+    if (photo.id === photos[1].id && count === 1) throw new Error('Synthetic Wi-Fi interruption');
+    const payload = await readFile(new URL('../fixtures/' + photo.id + '.jpg', import.meta.url));
+    return new Response(payload, { headers: { 'Content-Type': 'image/jpeg', 'Content-Length': String(payload.length) } });
+  }});
+  const h = await harness(t, { adapter });
+  h.click('#landing-connect'); h.click('#confirm-connect');
+  await until(() => !h.$('#workspace').hidden && !h.$('#disconnect').disabled);
+  assert.match(h.$('#connection-badge').textContent, /Camera.*unverified/);
+  h.click('#select-visible'); h.click('#transfer');
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 2 && !h.$('#retry-unfinished').disabled);
+  assert.match(h.$('#recovery-note').textContent, /Restore camera Wi-Fi first/);
+  h.click('#retry-unfinished'); await until(() => h.all('.queue-item[data-state="ready"]').length === 3 && !h.$('#build-archive').disabled);
+  assert.equal(reads.get(photos[0].id), 1); assert.equal(reads.get(photos[1].id), 2); assert.equal(reads.get(photos[2].id), 1);
+  assert.ok(calls.every(call => call.method === 'GET'));
+  assert.equal(calls.length, 6, 'Only props, list, three originals and one retry are read');
+  for (const save of h.all('.queue-item-top button')) save.click();
+  for (const saved of h.saved) {
+    const photo = photos.find(photo => saved.filename.endsWith(photo.folder + '__' + photo.name));
+    assert.ok(photo);
+    assert.deepEqual(Buffer.from(await saved.blob.arrayBuffer()), await readFile(new URL('../fixtures/' + photo.id + '.jpg', import.meta.url)));
+  }
+});
+
+test('DOM: saved partial ZIP lease survives batch retry, rebuilt ZIP and clear, then expires', async t => {
+  let reads = 0;
+  const h = await harness(t, { intercept: async url => {
+    if (url.pathname.endsWith('/original') && ++reads === 2) return Response.json({ error: 'Synthetic interruption' }, { status: 503 });
+  }});
+  await h.demo(); h.change('#folder', '100RICOH'); h.click('#select-visible'); h.click('#transfer');
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 5 && !h.$('#build-archive').disabled);
+  h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
+  const originalSetTimeout = h.window.setTimeout.bind(h.window), timers = [];
+  h.window.setTimeout = (fn, ms, ...args) => ms === 30000 ? (timers.push(fn), timers.length) : originalSetTimeout(fn, ms, ...args);
+  const archiveUrl = [...h.blobs.entries()].find(([,blob]) => blob.type === 'application/zip')[0];
+  h.click('#save-archive'); const oldZip = h.saved[0].blob;
+  const leaseUrl = [...h.blobs.entries()].find(([url,blob]) => blob === oldZip && url !== archiveUrl)[0];
+  h.click('#retry-unfinished');
+  assert.equal(h.$('#save-archive').hidden, true);
+  assert.ok(h.revoked.includes(archiveUrl)); assert.ok(!h.revoked.includes(leaseUrl));
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 6 && !h.$('#build-archive').disabled);
+  assert.ok(h.blobs.has(leaseUrl));
+  h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
+  h.click('#save-archive'); const newZip = h.saved[1].blob;
+  assert.notEqual(oldZip, newZip); assert.ok(newZip.size > oldZip.size);
+  h.click('#clear-queue'); assert.equal(h.blobs.size, 2);
+  assert.deepEqual(new Set(h.blobs.values()), new Set([oldZip,newZip]));
+  timers.forEach(fn => fn()); assert.equal(h.blobs.size, 0);
+});
+
+test('DOM: removed individual retry handle cannot queue detached entry', async t => {
+  let reads = 0;
+  const h = await harness(t, { intercept: async url => {
+    if (url.pathname.endsWith('/original')) { reads++; return Response.json({ error: 'Synthetic interruption' }, { status: 503 }); }
+  }});
+  await h.demo(); h.click('.photo-select input'); h.click('#transfer');
+  await until(() => !h.$('#retry-unfinished').disabled);
+  const oldRetry = h.$('.queue-item-top button');
+  h.click('.queue-remove'); oldRetry.dispatchEvent(new h.window.Event('click'));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(reads, 1); assert.equal(h.all('.queue-item').length, 0); assert.equal(h.blobs.size, 0);
+});
+
+test('DOM: delayed aborted transfer cleanup must not overwrite retry after failed disconnect', async t => {
+  let reads = 0, releaseOldCancel;
+  const h = await harness(t, { intercept: async (url, opts) => {
+    if (url.pathname === '/api/disconnect') return Response.json({error:'Synthetic disconnect failure'}, {status:503});
+    if (!url.pathname.endsWith('/original')) return;
+    reads++;
+    if (reads > 1) return;
+    let chunk = 0;
+    return {ok: true, headers:new Headers({'Content-Type':'image/jpeg','X-File-Size':String(original.length)}), body:{getReader:()=>({
+      read:async()=> chunk++ === 0 ? {value:original.subarray(0,30),done:false} : new Promise((_,reject)=> opts.signal.addEventListener('abort',()=>reject(new DOMException('cancelled','AbortError')))),
+      cancel:async()=>new Promise(resolve=>{releaseOldCancel=resolve;}), releaseLock:()=>{}
+    })}};
+  }});
+  await h.demo(); h.click('.photo-select input'); h.click('#transfer'); await until(()=>reads === 1);
+  h.click('#disconnect'); await until(()=>!h.$('#retry-unfinished').disabled && releaseOldCancel);
+  h.click('#retry-unfinished'); await until(()=>h.$('.queue-item')?.dataset.state === 'ready' && !h.$('#build-archive').disabled);
+  releaseOldCancel(); await new Promise(resolve=>setTimeout(resolve,10));
+  h.click('#build-archive'); await until(()=>!h.$('#save-archive').hidden);
+  assert.equal(h.$('.queue-item').dataset.state, 'ready');
+  assert.ok(h.$('.queue-item-top button[aria-label^="Save"]'));
 });

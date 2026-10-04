@@ -65,3 +65,23 @@ RUN_PYTHON_ZIP_AUDIT=1 npm run check
 This additional audit decodes the ZIP produced through the DOM transfer flow with Python's standard-library `zipfile`: all 24 JPEGs match their synthetic source bytes, CRC checks pass, SHA-256 and byte lengths match the manifest, and the two source sessions have separate archive paths. Ordinary `npm run check` remains Node-only.
 
 These remain local synthetic HTTP/DOM and in-memory handoff checks. No physical camera, real browser rendering, phone transfer, or actual browser save to disk was verified. This follow-on is not evidence of a push, merge, CI run, or deployment.
+
+## Batch recovery QA, October 4, 2026
+
+The one-action **Retry unfinished (N)** flow passes **94/94** checks (47 bridge/protocol/security, 9 packaging, 38 DOM interaction) on Node.js 24.19.0, plus syntax and whitespace checks. `npm run test:core` independently passes 56/56. `RUN_PYTHON_ZIP_AUDIT=1 npm run check` also passes the existing 24-JPEG independent Python ZIP CRC, source-byte and SHA-256 audit.
+
+Nine added regression scenarios verify:
+
+- Cancel after one complete original, then explicitly retry the remaining 11 in one action; repeated clicks issue no duplicate reads, and all 12 final Blob payloads match their source fixtures
+- Mixed old-session, stale-response, exhausted and retryable entries; only the eligible current-session file restarts, including attempts through detached individual Retry buttons
+- Partial ZIP invalidation before batch recovery, with ready and already handed-off JPEG Blobs retained; replacement ZIP includes the recovered files
+- Retry guards while ZIP preparation is active; cancellation and Clear correctly reset recovery controls
+- Repeated transfer cancellation respects the three-attempt cap while keeping never-attempted files eligible
+- The injected camera-protocol path (CameraAdapter → bridge → DOM), with a simulated Wi-Fi failure: only the missing original is fetched again, all reads remain GET requests, no resized variant is requested, and each final JPEG matches its source fixture
+- A saved partial ZIP keeps its separate browser-download lease through retry, archive rebuilding and Clear, until the grace period expires
+- An old individual Retry handle cannot revive a removed entry
+- Delayed abort cleanup after a failed Disconnect cannot overwrite a newer successful retry or hide its individual Save action; the regression reproduced the original failure before the generation/attempt ownership guard was added
+
+Manual acceptance additions: interrupt Wi-Fi without disconnecting the app session, restore camera Wi-Fi, and use Retry unfinished; then explicitly cancel and recover a partial batch. Check that the displayed count matches the restarted files, previous ready files are not transferred again, and any old partial ZIP must be prepared again. Separately test Disconnect/reconnect: old unfinished entries must require reselection. These checks are still pending on hardware and in an actual browser.
+
+The product rationale and official comparison sources are in [batch-recovery.md](batch-recovery.md). No browser/OS Wi-Fi changes, camera mutations, new model support, background retries, persistent transfer history, HTTP Range resumption or verified save-to-disk behavior were added.
