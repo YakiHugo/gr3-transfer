@@ -10,6 +10,11 @@ const DOWNLOAD_GRACE_MS = 30000;
 const DOWNLOAD_LEASE_LIMIT = MEMORY_LIMIT + 1024 * 1024;
 const state = { session: null, photos: [], selected: new Set(), page: 1, busy: true, generation: 0, queue: [], running: false, controller: null, previewId: null, retained: 0, requestController: new AbortController(), restoreClearedTray: false, exporting: false, archive: null, archiveController: null, downloadLeases: new Map(), leasedBytes: 0 };
 let entryId = 0;
+// Reuse locale collation and one derived list, rather than sorting the whole card
+// again for every selection, preview toggle or page navigation.
+const photoNameCollator = new Intl.Collator(undefined, { numeric: true });
+const photoFolderCollator = new Intl.Collator();
+let galleryCache = null;
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -163,6 +168,7 @@ async function connect(mode) {
     if (generation !== state.generation) return;
     state.session = session;
     state.photos = [];
+    galleryCache = null;
     state.selected.clear();
     renderQueue();
     renderSession();
@@ -187,6 +193,7 @@ async function disconnect() {
     if (generation !== state.generation) return;
     state.session = session;
     state.photos = [];
+    galleryCache = null;
     state.selected.clear();
     closeDialog($('preview-dialog'));
     renderQueue();
@@ -212,9 +219,10 @@ async function refresh() {
 function filteredPhotos() {
   const query = $('search').value.trim().toLocaleLowerCase();
   const folder = $('folder').value;
-  const list = state.photos.filter(photo => (!folder || photo.folder === folder) && (!query || photo.name.toLocaleLowerCase().includes(query)));
   const sort = $('sort').value;
-  const nameCompare = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }) || a.folder.localeCompare(b.folder);
+  if (galleryCache && galleryCache.photos === state.photos && galleryCache.query === query && galleryCache.folder === folder && galleryCache.sort === sort) return galleryCache.list;
+  const list = state.photos.filter(photo => (!folder || photo.folder === folder) && (!query || photo.name.toLocaleLowerCase().includes(query)));
+  const nameCompare = (a, b) => photoNameCollator.compare(a.name, b.name) || photoFolderCollator.compare(a.folder, b.folder);
   list.sort((a, b) => {
     if (sort === 'name-asc') return nameCompare(a, b);
     if (sort === 'name-desc') return -nameCompare(a, b);
@@ -222,6 +230,7 @@ function filteredPhotos() {
     const at = dateValue(a.takenAt), bt = dateValue(b.takenAt);
     return (Number.isFinite(bt) ? bt : -Infinity) - (Number.isFinite(at) ? at : -Infinity) || nameCompare(a, b);
   });
+  galleryCache = { photos: state.photos, query, folder, sort, list };
   return list;
 }
 function currentPage() {
@@ -683,6 +692,7 @@ function suspendPage() {
   state.retained = 0;
   state.session = null;
   state.photos = [];
+  galleryCache = null;
   state.selected.clear();
   state.page = 1;
   for (const dialog of document.querySelectorAll('dialog')) closeDialog(dialog);
@@ -719,6 +729,7 @@ async function reconcileSession(restored = false) {
     if (generation !== state.generation) return;
     state.session = null;
     state.photos = [];
+    galleryCache = null;
     state.selected.clear();
     renderGallery();
     renderSession();
