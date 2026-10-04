@@ -650,3 +650,15 @@ test('DOM: cached gallery refresh replaces metadata, prunes removed selections a
   await h.demo(); assert.equal(h.$('.photo-meta h3').textContent, 'NEW.JPG');
   assert.equal(h.$('#selection-count').textContent, '0');
 });
+
+test('DOM: structured connection failures show relevant recovery steps and retry clears them', async t => {
+  const h = await harness(t, { adapter: { connect: async () => { throw new AppError('Different model', 'WRONG_MODEL', 409); } } });
+  h.click('#landing-connect'); h.click('#confirm-connect');
+  await until(() => !h.$('#connect-error').hidden);
+  assert.match(h.$('#connect-recovery').textContent, /Only a device identifying as RICOH GR III/);
+  assert.equal(h.$('#connect-recovery').hidden, false);
+  h.click('#confirm-connect');
+  assert.equal(h.$('#connect-recovery').hidden, true);
+  await until(() => !h.$('#connect-error').hidden);
+  assert.equal(h.cameraCalls(), 0);
+});

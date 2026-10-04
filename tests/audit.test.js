@@ -383,6 +383,6 @@ test('audit: camera request timeout aborts fetch and releases the queue', async 
   }});
   // AbortSignal.timeout is unref'ed. This bounded guard keeps the test alive and cannot make camera requests.
   const guard=setTimeout(()=>{},1000);
-  try{await assert.rejects(camera.list(),{code:'CAMERA_UNREACHABLE'});assert.equal(upstream.aborted,true);assert.deepEqual(await camera.list(),[]);}
+  try{await assert.rejects(camera.list(),{code:'CAMERA_TIMEOUT'});assert.equal(upstream.aborted,true);assert.deepEqual(await camera.list(),[]);}
   finally{clearTimeout(guard);}
 });
