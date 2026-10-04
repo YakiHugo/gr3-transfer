@@ -182,3 +182,10 @@ test('new connection wins over an older pending camera handshake', async t => {
   assert.equal((await pending).status, 409);
   assert.equal((await (await fetch(`${base}/api/session`)).json()).mode, 'demo');
 });
+
+ test('camera request classifies timeout separately and keeps cancellation precedence', async () => {
+  const adapter = new CameraAdapter({ fetchImpl: async () => { throw new DOMException('Timed out', 'TimeoutError'); } });
+  await assert.rejects(adapter.request('/props', undefined, 1), { code: 'CAMERA_TIMEOUT', status: 504 });
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(adapter.request('/props', controller.signal, 1), { code: 'CANCELLED' });
+});

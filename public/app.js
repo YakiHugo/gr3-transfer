@@ -57,7 +57,11 @@ async function api(path, options = {}) {
   const response = await fetch(path, { cache: 'no-store', credentials: 'same-origin', signal: state.requestController.signal, ...options });
   let result;
   try { result = await response.json(); } catch { throw new Error('The local bridge returned an unreadable response. Restart it and reload this page.'); }
-  if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
+  if (!response.ok) {
+    const error = new Error(result.error || `Request failed (${response.status}).`);
+    error.code = typeof result.code === 'string' ? result.code : 'BRIDGE_ERROR';
+    throw error;
+  }
   return result;
 }
 async function post(path, body = {}) {
@@ -139,11 +143,31 @@ function applyPhotos(result) {
   if ([...$('folder').options].some(option => option.value === oldFolder)) $('folder').value = oldFolder;
   renderGallery();
 }
+function connectionAdvice(code) {
+  const advice = {
+    CAMERA_UNREACHABLE: ['Check the bridge computer’s Wi-Fi', 'Join the network shown by your GR III. A phone joining that network does not connect this computer.', 'Keep the camera awake and close other camera apps, then retry.'],
+    CAMERA_TIMEOUT: ['The camera took too long to respond', 'Move the camera closer and keep it awake.', 'Close other camera apps and retry. No originals were changed.'],
+    WRONG_MODEL: ['Check the connected camera', 'Only a device identifying as RICOH GR III is supported here.', 'Reconnect the bridge computer to your GR III network. Other models are not assumed compatible.'],
+    INVALID_CSRF: ['Refresh the local page', 'The bridge may have restarted. Save any ready originals before reloading.', 'Reload this page, then try the connection again.'],
+    UNSUPPORTED_RESPONSE: ['Camera response not recognized', 'This firmware may use a different response format.', 'Retry once. If it repeats, keep using your existing transfer method; do not change camera settings to work around it.'],
+  };
+  return advice[code] || ['Connection needs attention', 'Keep the camera awake, check the bridge computer’s Wi-Fi and retry.', 'Ready originals already in this tab remain available to save.'];
+}
+function showConnectionAdvice(code) {
+  const [heading, ...steps] = connectionAdvice(code);
+  const panel = $('connect-recovery');
+  panel.replaceChildren(element('h3', '', heading));
+  const list = element('ol');
+  steps.forEach(step => list.append(element('li', '', step)));
+  panel.append(list);
+  panel.hidden = false;
+}
 async function connect(mode) {
   if (state.busy || state.running || state.exporting) return;
   setBusy(true);
   const generation = ++state.generation;
   $('connect-error').hidden = true;
+  $('connect-recovery').hidden = true;
   try {
     const session = await post('/api/connect', { mode });
     if (generation !== state.generation) return;
@@ -173,7 +197,7 @@ async function connect(mode) {
     renderQueue();
     renderSession();
     const message = error.message || 'Connection failed. Check the bridge and camera Wi-Fi.';
-    if ($('connect-dialog').open) { $('connect-error').textContent = message; $('connect-error').hidden = false; }
+    if ($('connect-dialog').open) { $('connect-error').textContent = message; $('connect-error').hidden = false; showConnectionAdvice(error.code); }
     else notify(message, true);
   } finally {
     if (generation === state.generation) setBusy(false);

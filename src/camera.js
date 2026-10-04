@@ -92,6 +92,7 @@ export class CameraAdapter {
     } catch (error) {
       if (error instanceof AppError) throw error;
       if (signal?.aborted) throw new AppError('This operation was cancelled.', 'CANCELLED', 409);
+      if (error?.name === 'TimeoutError') throw new AppError('The camera response timed out. Keep it awake and retry.', 'CAMERA_TIMEOUT', 504);
       throw new AppError('Could not reach the GR III. Join its Wi-Fi network, keep the camera awake, close other camera apps, then retry.', 'CAMERA_UNREACHABLE', 503);
     }
   }
