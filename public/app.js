@@ -178,6 +178,7 @@ async function connect(mode) {
     state.page = 1;
     $('search').value = '';
     $('folder').value = '';
+    $('selected-only').checked = false;
     const result = await api('/api/photos');
     if (generation !== state.generation) return;
     applyPhotos(result);
@@ -284,13 +285,14 @@ function filteredPhotos() {
   return list;
 }
 function currentPage() {
-  const list = filteredPhotos();
+  const filtered = filteredPhotos();
+  const list = $('selected-only').checked ? filtered.filter(photo => state.selected.has(photo.id)) : filtered;
   state.page = Math.max(1, Math.min(state.page, Math.ceil(list.length / PAGE_SIZE) || 1));
   return { list, visible: list.slice((state.page - 1) * PAGE_SIZE, state.page * PAGE_SIZE) };
 }
 function toggleSelection(id) {
   if (state.selected.has(id)) state.selected.delete(id); else state.selected.add(id);
-  renderSelection();
+  if ($('selected-only').checked) renderGallery(); else renderSelection();
 }
 function renderSelection() {
   const chosen = state.photos.filter(photo => state.selected.has(photo.id));
@@ -302,7 +304,11 @@ function renderSelection() {
   const unknown = chosen.filter(photo => !knownSize(photo.bytes)).length;
   $('selection-size').textContent = !chosen.length ? 'Choose your keepers from the contact sheet.' : unknown ? `${total ? `${bytes(total)} known · ` : ''}${unknown} file size${unknown === 1 ? '' : 's'} unknown` : `${bytes(total)} total · original JPEGs`;
   $('clear-selection').disabled = !chosen.length;
-  $('select-visible').disabled = !currentPage().visible.length;
+  const visible = currentPage().visible;
+  const visibleSelected = visible.filter(photo => state.selected.has(photo.id)).length;
+  $('select-visible').disabled = !visible.length;
+  $('deselect-visible').disabled = !visibleSelected;
+  $('selection-visibility').textContent = chosen.length ? `${visibleSelected} selected on this page · ${chosen.length - visibleSelected} elsewhere` : 'No frames selected';
   for (const card of $('gallery').children) {
     const selected = state.selected.has(card.dataset.photoId);
     card.classList.toggle('selected', selected);
@@ -350,7 +356,7 @@ function renderGallery() {
   });
   $('photo-count').textContent = `${list.length} frame${list.length === 1 ? '' : 's'}${list.length !== state.photos.length ? ` of ${state.photos.length}` : ''}`;
   $('gallery-empty').hidden = list.length !== 0;
-  $('empty-description').textContent = state.photos.length ? 'Try a different filename or folder.' : 'No JPEGs were returned by this source. Try Refresh after checking the camera.';
+  $('empty-description').textContent = state.photos.length ? ($('selected-only').checked ? 'No selected frames match these filters. Clear the review filter to choose more frames.' : 'Try a different filename or folder.') : 'No JPEGs were returned by this source. Try Refresh after checking the camera.';
   $('reset-filters').hidden = !state.photos.length;
   renderPagination(list.length);
   renderSelection();
@@ -707,8 +713,10 @@ $('refresh').addEventListener('click', refresh);
 $('dismiss-notice').addEventListener('click', () => { $('notice').hidden = true; });
 for (const id of ['search', 'folder', 'sort']) $(id).addEventListener(id === 'search' ? 'input' : 'change', () => { state.page = 1; renderGallery(); });
 $('select-visible').addEventListener('click', () => { currentPage().visible.forEach(photo => state.selected.add(photo.id)); renderSelection(); });
-$('clear-selection').addEventListener('click', () => { state.selected.clear(); renderSelection(); });
-$('reset-filters').addEventListener('click', () => { $('search').value = ''; $('folder').value = ''; state.page = 1; renderGallery(); });
+$('clear-selection').addEventListener('click', () => { state.selected.clear(); if ($('selected-only').checked) renderGallery(); else renderSelection(); });
+$('selected-only').addEventListener('change', () => { state.page = 1; renderGallery(); });
+$('deselect-visible').addEventListener('click', () => { currentPage().visible.forEach(photo => state.selected.delete(photo.id)); if ($('selected-only').checked) renderGallery(); else renderSelection(); });
+$('reset-filters').addEventListener('click', () => { $('selected-only').checked = false; $('search').value = ''; $('folder').value = ''; state.page = 1; renderGallery(); });
 $('preview-select').addEventListener('click', () => { if (state.previewId) toggleSelection(state.previewId); });
 $('transfer').addEventListener('click', addToQueue);
 $('mobile-transfer').addEventListener('click', () => { addToQueue(); if (state.queue.length) $('queue-panel').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' }); });
@@ -752,6 +760,7 @@ function suspendPage() {
   for (const dialog of document.querySelectorAll('dialog')) closeDialog(dialog);
   clearPreview();
   $('search').value = '';
+  $('selected-only').checked = false;
   $('folder').replaceChildren(new Option('All folders', ''));
   $('notice').hidden = true;
   $('cancel-queue').disabled = false;
