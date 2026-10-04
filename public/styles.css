@@ -14,3 +14,6 @@
 .selection-review label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .selection-review input { width: 18px; height: 18px; accent-color: #324c36; }
 .selection-review > span { flex: 1; min-width: 160px; }
+
+.preview-navigation { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 24px; font-size: .8rem; }
+.preview-navigation > span { text-align: center; }
