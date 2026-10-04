@@ -104,3 +104,20 @@ These are one-run local microbenchmarks, not a browser-frame-rate, mobile-device
 `RUN_PYTHON_ZIP_AUDIT=1 npm run check` passes **98/98** checks (47 bridge/protocol/security, 9 packaging, 3 gallery derivation, 39 DOM interaction), including the existing 24-JPEG independent Python ZIP/source-byte/CRC/SHA-256 audit. `npm run test:core` includes the new dependency-free gallery regressions. New coverage checks numeric/folder tie ordering, unknown metadata, non-mutating sorting, full-card cache reuse, filter/sort/source replacement invalidation, refresh metadata and selection pruning, page clamping, and reconnect source replacement.
 
 No camera writes, network exposure, RAW support, new camera support, real-browser/mobile validation or save-to-disk claims were introduced. No CI configuration exists; these are local checks.
+
+## Repeatable pull-request checks
+
+`.github/workflows/verify.yml` runs the pinned DOM dependency install and complete
+`npm run check` on Node.js 22 and 24 for pull requests and main-branch updates.
+The jobs use read-only repository permission, no secrets, no install scripts,
+a ten-minute timeout, and a serial matrix. They also print the synthetic
+50,000-frame gallery benchmark; its timings are informational, not a hardware
+throughput claim or a flaky performance threshold.
+
+Run the same checks locally with `npm ci --ignore-scripts` followed by
+`npm run check` and `node scripts/benchmark-gallery.mjs`. Fixture and injected
+protocol tests never intentionally contact a physical camera. GitHub Actions
+success still does not establish physical GR III compatibility, real browser
+rendering, mobile connectivity, or a successful disk/Photos save. Inspect the
+workflow run for the PR's exact final head before merging; a local pass is not
+proof that hosted CI ran.
