@@ -757,3 +757,26 @@ test('DOM: transfer preflight exposes unknown sizes without guessing and exclude
   assert.match(other.$('#transfer-plan').textContent, /1 unknown sizes/);
   assert.equal(other.$('#transfer-plan').classList.contains('blocked'), false);
 });
+
+test('DOM: transfer pace reports measured averages and only estimates known remaining bytes', async t => {
+  const h = await harness(t);
+  const timingSource = app.slice(app.indexOf('function bytes('), app.indexOf('function dateValue(')) + app.slice(app.indexOf('function durationLabel('), app.indexOf('function itemStatus('));
+  const sample = h.window.eval(`${timingSource}\ntransferTiming({ startedAt: 0, finishedAt: 2000, received: 1024, expected: 2048 })`);
+  assert.match(sample, /2s elapsed/); assert.match(sample, /512 B\/s average/); assert.match(sample, /about 2s remaining/);
+  const unknown = h.window.eval(`${timingSource}\ntransferTiming({ startedAt: 0, finishedAt: 2000, received: 1024, expected: null })`);
+  assert.doesNotMatch(unknown, /remaining/); assert.match(unknown, /average/);
+  const starting = h.window.eval(`${timingSource}\ntransferTiming({ startedAt: 100, finishedAt: 100, received: 0, expected: 2048 })`);
+  assert.equal(starting, '0s elapsed'); assert.doesNotMatch(starting, /NaN|Infinity/);
+});
+
+test('DOM: elapsed progress keeps updating while a read is stalled and cancellation removes it', async t => {
+  let started;
+  const h = await harness(t, { intercept: async (url, opts) => url.pathname.endsWith('/original') ? new Response(new ReadableStream({ start(c) {
+    started = true; c.enqueue(original.subarray(0, 20)); opts.signal.addEventListener('abort', () => c.error(new DOMException('cancelled', 'AbortError')));
+  } }), { headers: { 'Content-Type': 'image/jpeg' } }) : undefined });
+  await h.demo(); h.click('.photo-select input'); h.click('#transfer'); await until(() => started);
+  await until(() => /1s elapsed/.test(h.$('.queue-item-status').textContent));
+  assert.match(h.$('.queue-item-status').textContent, /average/);
+  h.click('#cancel-queue'); await until(() => h.$('.queue-item')?.dataset.state === 'cancelled');
+  assert.doesNotMatch(h.$('.queue-item-status').textContent, /elapsed/);
+});
