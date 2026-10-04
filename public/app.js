@@ -73,6 +73,7 @@ async function post(path, body = {}) {
 }
 function setBusy(value) { state.busy = value; updateControls(); }
 function updateControls() {
+  renderTransferPlan();
   const blocked = state.busy || state.running || state.exporting;
   for (const id of ['landing-connect', 'try-demo', 'switch-camera', 'refresh', 'confirm-connect']) $(id).disabled = blocked;
   $('disconnect').disabled = state.busy || state.exporting;
@@ -442,13 +443,33 @@ function showHelp(kind) {
   sections.forEach(([title, body]) => $('help-content').append(element('h3', '', title), element('p', '', body)));
   openDialog($('help-dialog'));
 }
-function addToQueue() {
-  if (state.running || state.busy || state.exporting) return;
+function transferPlan() {
   const selected = state.photos.filter(photo => state.selected.has(photo.id));
   const existing = new Set(state.queue.filter(currentSource).map(entry => entry.photo.id));
   const additions = selected.filter(photo => !existing.has(photo.id));
+  const unknown = additions.filter(photo => !knownSize(photo.bytes)).length;
+  const knownBytes = additions.reduce((sum, photo) => sum + (knownSize(photo.bytes) ? photo.bytes : 0), 0);
+  let blocked = '';
+  if (state.queue.length + additions.length > QUEUE_LIMIT) blocked = `The tray holds ${QUEUE_LIMIT} entries. Select fewer frames or clear completed entries first.`;
+  else if (additions.some(photo => knownSize(photo.bytes) && photo.bytes > FILE_LIMIT)) blocked = 'A selected original exceeds the 128 MB per-file limit. Deselect it before transferring this batch.';
+  else if (state.retained + state.leasedBytes + knownBytes > MEMORY_LIMIT) blocked = 'This batch exceeds the 256 MB tray budget. Select fewer frames, or save and remove ready originals. Recent download links can take 30 seconds to release.';
+  return { additions, unknown, knownBytes, duplicates: selected.length - additions.length, blocked };
+}
+function renderTransferPlan() {
+  const plan = transferPlan();
+  const parts = [`${state.queue.length} / ${QUEUE_LIMIT} tray slots used`, `${bytes(state.retained)} retained`];
+  if (plan.additions.length) parts.push(`${plan.additions.length} new originals`, `${bytes(plan.knownBytes)} known${plan.unknown ? ` + ${plan.unknown} unknown sizes` : ''}`);
+  if (plan.duplicates) parts.push(`${plan.duplicates} already in tray; skipped`);
+  if (state.leasedBytes) parts.push(`${bytes(state.leasedBytes)} in temporary download links`);
+  $('transfer-plan').textContent = plan.blocked || parts.join(' · ') + (plan.unknown ? '. Unknown sizes are checked while transferring; use a smaller batch if memory is limited.' : '');
+  $('transfer-plan').classList.toggle('blocked', Boolean(plan.blocked));
+}
+function addToQueue() {
+  if (state.running || state.busy || state.exporting) return;
+  const plan = transferPlan();
+  const additions = plan.additions;
   if (!additions.length) { notify('These frames are already in the transfer tray. Save ready files, retry a failed transfer, or remove an entry to transfer it again.'); return; }
-  if (state.queue.length + additions.length > QUEUE_LIMIT) { notify(`The tray holds ${QUEUE_LIMIT} entries. Select fewer frames or clear completed entries first.`, true); return; }
+  if (plan.blocked) { notify(plan.blocked, true); return; }
   invalidateArchive();
   additions.forEach(photo => state.queue.push({ id: ++entryId, sourceId: state.session.sessionId, sourceMode: state.session.mode, photo: { ...photo }, status: 'queued', received: 0, expected: knownSize(photo.bytes) ? photo.bytes : null, attempts: 0, objectUrl: null, blob: null, blobBytes: 0, retryable: true, error: '' }));
   renderQueue();
@@ -667,6 +688,7 @@ function handoffDownload(blob, filename) {
     URL.revokeObjectURL(lease.objectUrl);
     state.downloadLeases.delete(blob);
     state.leasedBytes = Math.max(0, state.leasedBytes - lease.bytes);
+    renderTransferPlan();
   }, DOWNLOAD_GRACE_MS);
   const anchor = element('a');
   anchor.href = lease.objectUrl; anchor.download = filename;
