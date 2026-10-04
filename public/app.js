@@ -475,9 +475,24 @@ function addToQueue() {
   renderQueue();
   runQueue();
 }
+function durationLabel(seconds) {
+  const whole = Math.max(0, Math.floor(seconds));
+  return whole < 60 ? `${whole}s` : `${Math.floor(whole / 60)}m ${whole % 60}s`;
+}
+function transferTiming(entry) {
+  if (!Number.isFinite(entry.startedAt)) return '';
+  const seconds = Math.max(0, ((entry.finishedAt ?? performance.now()) - entry.startedAt) / 1000);
+  const parts = [`${durationLabel(seconds)} elapsed`];
+  if (seconds >= 1 && entry.received > 0) {
+    const rate = entry.received / seconds;
+    parts.push(`${bytes(rate)}/s average`);
+    if (knownSize(entry.expected) && entry.expected > entry.received) parts.push(`about ${durationLabel((entry.expected - entry.received) / rate)} remaining`);
+  }
+  return parts.join(' · ');
+}
 function itemStatus(entry) {
   if (entry.status === 'queued') return 'Waiting its turn';
-  if (entry.status === 'transferring') return `${bytes(entry.received)}${knownSize(entry.expected) ? ` / ${bytes(entry.expected)}` : ' transferred · size unknown'}`;
+  if (entry.status === 'transferring') return `${bytes(entry.received)}${knownSize(entry.expected) ? ` / ${bytes(entry.expected)}` : ' transferred · size unknown'} · ${transferTiming(entry)}`;
   if (entry.status === 'ready') return `${bytes(entry.blobBytes)} · ready to save`;
   if (entry.status === 'handed-off') return 'Sent to browser · check Downloads';
   if (unfinished(entry) && !currentSource(entry)) return 'Source disconnected or changed · reconnect and reselect this frame';
@@ -582,9 +597,13 @@ function updateEntryProgress(entry) {
 }
 async function transferEntry(entry, signal, generation) {
   const attempt = ++entry.attempts;
+  entry.startedAt = performance.now(); entry.finishedAt = null;
   entry.status = 'transferring'; entry.received = 0; entry.error = ''; entry.retryable = true;
   entry.expected = knownSize(entry.photo.bytes) ? entry.photo.bytes : null;
   renderQueue();
+  const progressTimer = setInterval(() => {
+    if (generation === state.generation && attempt === entry.attempts && entry.status === 'transferring') updateEntryProgress(entry);
+  }, 1000);
   let reader;
   let response;
   try {
@@ -629,6 +648,7 @@ async function transferEntry(entry, signal, generation) {
     entry.objectUrl = objectUrl;
     entry.blobBytes = blob.size;
     state.retained += blob.size;
+    entry.finishedAt = performance.now();
     entry.status = 'ready';
   } catch (error) {
     if (reader) { try { await reader.cancel(); } catch { /* Already aborted or closed. */ } }
@@ -638,7 +658,7 @@ async function transferEntry(entry, signal, generation) {
     if (generation !== state.generation || attempt !== entry.attempts) return;
     entry.status = signal.aborted || error.name === 'AbortError' ? 'cancelled' : 'failed';
     entry.error = entry.status === 'failed' ? `${error.message || 'Connection interrupted. No file was prepared.'}${entry.attempts >= MAX_ATTEMPTS ? ' Retry limit reached; remove and reselect after checking the connection.' : ''}` : '';
-  } finally { if (reader) { try { reader.releaseLock(); } catch { /* Reader already released. */ } } }
+  } finally { clearInterval(progressTimer); if (reader) { try { reader.releaseLock(); } catch { /* Reader already released. */ } } }
 }
 async function runQueue() {
   if (state.running || state.busy || state.exporting) return;
