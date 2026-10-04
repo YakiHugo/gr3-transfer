@@ -28,7 +28,7 @@ Only an exact normalized `RICOH GR III` device identity is accepted. IIIx, IV an
 
 ## What is implemented
 
-- Responsive desktop/phone-width gallery, previews, selection and filters
+- Responsive desktop/phone-width gallery, previews, selection and filters; cached numeric sorting keeps selection and page changes from re-sorting the full card
 - Explicit disconnected, synthetic-demo and real-camera modes
 - Read-only Wi-Fi adapter, filename filtering and sequential camera reads
 - Original JPEG transfers without resizing, conversion or EXIF rewriting
@@ -84,6 +84,8 @@ npm ci --ignore-scripts      # installs dev-only DOM test dependency
 npm test
 npm run check
 ```
+
+For a repeatable 50,000-frame synthetic gallery derivation benchmark, run `node scripts/benchmark-gallery.mjs`. This measures filtering/sorting only, not camera throughput or browser rendering.
 
 Tests use injected fake camera responses and local synthetic files. They never contact `192.168.0.1`. Happy DOM is a pinned development-only dependency for interaction tests, not a real-browser or visual test. Starting the app does not require installing it. See [docs/verification.md](docs/verification.md) for completed checks and the pending hardware checklist.
 

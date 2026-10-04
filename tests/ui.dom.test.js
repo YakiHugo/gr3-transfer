@@ -624,3 +624,29 @@ test('DOM: delayed aborted transfer cleanup must not overwrite retry after faile
   assert.equal(h.$('.queue-item').dataset.state, 'ready');
   assert.ok(h.$('.queue-item-top button[aria-label^="Save"]'));
 });
+
+test('DOM: cached gallery refresh replaces metadata, prunes removed selections and clamps the page', async t => {
+  let photos = Array.from({ length: 50 }, (_, i) => ({ ...manifest[0], id: String(i), name: `R${String(i).padStart(7, '0')}.JPG` }));
+  const h = await harness(t, { intercept: async url => {
+    if (['/api/photos', '/api/refresh'].includes(url.pathname)) return Response.json({ photos });
+  }});
+  await h.demo();
+  h.change('#sort', 'name-asc');
+  h.click('#select-visible');
+  h.click('#pagination button:last-child'); h.click('#select-visible');
+  assert.equal(h.$('#selection-count').textContent, '48');
+  h.click('#pagination button:last-child'); assert.equal(h.all('.photo-card').length, 2);
+  photos = [{ ...photos[0], name: 'REPLACED.JPG', bytes: 2048 }];
+  h.click('#refresh'); await until(() => !h.$('#refresh').disabled);
+  assert.equal(h.all('.photo-card').length, 1);
+  assert.equal(h.$('.photo-meta h3').textContent, 'REPLACED.JPG');
+  assert.match(h.$('.photo-meta p').textContent, /2 KB/);
+  assert.equal(h.$('#selection-count').textContent, '1');
+  assert.equal(h.$('#pagination').hidden, true);
+  h.change('#search', 'R000', 'input'); assert.equal(h.all('.photo-card').length, 0);
+  h.click('#reset-filters'); assert.equal(h.$('.photo-meta h3').textContent, 'REPLACED.JPG');
+  h.click('#disconnect'); await until(() => !h.$('#try-demo').disabled);
+  photos = [{ ...photos[0], id: 'new-session', name: 'NEW.JPG' }];
+  await h.demo(); assert.equal(h.$('.photo-meta h3').textContent, 'NEW.JPG');
+  assert.equal(h.$('#selection-count').textContent, '0');
+});

@@ -85,3 +85,22 @@ Nine added regression scenarios verify:
 Manual acceptance additions: interrupt Wi-Fi without disconnecting the app session, restore camera Wi-Fi, and use Retry unfinished; then explicitly cancel and recover a partial batch. Check that the displayed count matches the restarted files, previous ready files are not transferred again, and any old partial ZIP must be prepared again. Separately test Disconnect/reconnect: old unfinished entries must require reselection. These checks are still pending on hardware and in an actual browser.
 
 The product rationale and official comparison sources are in [batch-recovery.md](batch-recovery.md). No browser/OS Wi-Fi changes, camera mutations, new model support, background retries, persistent transfer history, HTTP Range resumption or verified save-to-disk behavior were added.
+
+## Large-card gallery performance, October 4, 2026
+
+The adapter permits 50,000 JPEGs, but the previous gallery rebuilt its filtered/sorted list on each selection and page change. A gallery render called it twice. Numeric `localeCompare` options were also processed for each sort comparison. On a shuffled synthetic 50,000-frame card, this froze the synchronous derivation for seconds even when the list had not changed.
+
+The gallery now reuses two locale collators and caches one derived list, keyed by source-array identity, normalized search, folder and sort. Refresh/session changes replace the source array; disconnected/error/pagehide paths explicitly release the cache. No photo bytes or additional image payloads are cached. Selection and page changes reuse the list; filter changes replace it. The DOM still renders only 24 cards per page.
+
+Repeatable measurement on Node.js 24.19.0, same container, `node scripts/benchmark-gallery.mjs [path-to-baseline-app.js]`:
+
+| Derivation | Before | After |
+| --- | ---: | ---: |
+| Initial 50,000-frame filter/sort | 2855.209 ms | 220.482 ms |
+| Repeated unchanged derivations (3) | 2829.273 / 2744.822 / 2749.706 ms | 0.100 / 0.023 / 0.020 ms |
+
+These are one-run local microbenchmarks, not a browser-frame-rate, mobile-device, camera-transfer-speed or memory-usage claim. Exact timings vary. The deterministic regression asserts that 48 selection/page interactions perform **zero additional sorting comparisons**. Initial derivation still runs synchronously; selection summaries still scan the photo list. Further work should be guided by actual-browser profiling.
+
+`RUN_PYTHON_ZIP_AUDIT=1 npm run check` passes **98/98** checks (47 bridge/protocol/security, 9 packaging, 3 gallery derivation, 39 DOM interaction), including the existing 24-JPEG independent Python ZIP/source-byte/CRC/SHA-256 audit. `npm run test:core` includes the new dependency-free gallery regressions. New coverage checks numeric/folder tie ordering, unknown metadata, non-mutating sorting, full-card cache reuse, filter/sort/source replacement invalidation, refresh metadata and selection pruning, page clamping, and reconnect source replacement.
+
+No camera writes, network exposure, RAW support, new camera support, real-browser/mobile validation or save-to-disk claims were introduced. No CI configuration exists; these are local checks.
