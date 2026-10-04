@@ -715,3 +715,21 @@ test('DOM: selection review retains hidden selections and deselects only the vis
   assert.equal(h.$('#deselect-visible').disabled, true);
   assert.equal(h.$('#transfer').disabled, true);
 });
+
+test('DOM: preview previous/next and arrow keys follow filtered order without changing selection', async t => {
+  const h = await harness(t); await h.demo(); h.change('#folder', '100RICOH'); h.change('#sort', 'name-asc');
+  h.click('.photo-image-button'); const first = h.$('#preview-title').textContent;
+  assert.equal(h.$('#preview-previous').disabled, true); assert.equal(h.$('#preview-position').textContent, '1 / 6');
+  h.click('#preview-select'); h.click('#preview-next');
+  assert.notEqual(h.$('#preview-title').textContent, first); assert.equal(h.$('#selection-count').textContent, '1');
+  h.$('#preview-dialog').dispatchEvent(new h.window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+  assert.equal(h.$('#preview-title').textContent, first);
+  for (let i = 0; i < 7; i++) h.click('#preview-next');
+  assert.equal(h.$('#preview-position').textContent, '6 / 6'); assert.equal(h.$('#preview-next').disabled, true);
+  assert.equal(h.requests.some(path => path.endsWith('/original')), false);
+  h.click('.preview-close'); h.click('#selected-only'); h.click('.photo-image-button');
+  h.click('#preview-select');
+  assert.equal(h.$('#preview-position').textContent, 'Outside current filters');
+  assert.equal(h.$('#preview-previous').disabled, true); assert.equal(h.$('#preview-next').disabled, true);
+  h.click('.preview-close'); assert.equal(h.$('#preview-image').hasAttribute('src'), false);
+});

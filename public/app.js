@@ -318,6 +318,7 @@ function renderSelection() {
     const selected = state.selected.has(state.previewId);
     $('preview-select').textContent = selected ? 'Deselect frame' : 'Select frame';
     $('preview-select').setAttribute('aria-pressed', String(selected));
+    renderPreviewNavigation();
   }
   updateControls();
 }
@@ -392,6 +393,20 @@ function closeDialog(dialog) {
   if (dialog === $('preview-dialog')) clearPreview();
   if (dialog.open) dialog.close();
   if (![...document.querySelectorAll('dialog')].some(item => item.open)) document.body.classList.remove('has-modal');
+}
+function renderPreviewNavigation() {
+  const list = currentPage().list;
+  const index = list.findIndex(photo => photo.id === state.previewId);
+  $('preview-previous').disabled = index <= 0;
+  $('preview-next').disabled = index < 0 || index >= list.length - 1;
+  $('preview-position').textContent = index < 0 ? 'Outside current filters' : `${index + 1} / ${list.length}`;
+}
+function navigatePreview(offset) {
+  if (!$('preview-dialog').open || !state.previewId) return;
+  const list = currentPage().list;
+  const index = list.findIndex(photo => photo.id === state.previewId);
+  if (index < 0 || !list[index + offset]) return;
+  showPreview(list[index + offset].id);
 }
 function showPreview(id) {
   const photo = state.photos.find(item => item.id === id);
@@ -717,6 +732,14 @@ $('clear-selection').addEventListener('click', () => { state.selected.clear(); i
 $('selected-only').addEventListener('change', () => { state.page = 1; renderGallery(); });
 $('deselect-visible').addEventListener('click', () => { currentPage().visible.forEach(photo => state.selected.delete(photo.id)); if ($('selected-only').checked) renderGallery(); else renderSelection(); });
 $('reset-filters').addEventListener('click', () => { $('selected-only').checked = false; $('search').value = ''; $('folder').value = ''; state.page = 1; renderGallery(); });
+$('preview-previous').addEventListener('click', () => navigatePreview(-1));
+$('preview-next').addEventListener('click', () => navigatePreview(1));
+$('preview-dialog').addEventListener('keydown', event => {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.target.closest?.('input, textarea, select, [contenteditable]')) return;
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    event.preventDefault(); navigatePreview(event.key === 'ArrowLeft' ? -1 : 1);
+  }
+});
 $('preview-select').addEventListener('click', () => { if (state.previewId) toggleSelection(state.previewId); });
 $('transfer').addEventListener('click', addToQueue);
 $('mobile-transfer').addEventListener('click', () => { addToQueue(); if (state.queue.length) $('queue-panel').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' }); });
