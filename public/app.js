@@ -156,6 +156,8 @@ function renderSession() {
 }
 function applyPhotos(result) {
   thumbnailFailures.clear();
+  state.cardSummary = result.summary || null;
+  renderCardFormats();
   state.photos = (Array.isArray(result.photos) ? result.photos : []).filter(photo => photo && typeof photo.id === 'string').map(photo => ({ ...photo, name: String(photo.name || 'Untitled.JPG'), folder: String(photo.folder || '') }));
   const valid = new Set(state.photos.map(photo => photo.id));
   state.selected = new Set([...state.selected].filter(id => valid.has(id)));
@@ -164,6 +166,12 @@ function applyPhotos(result) {
   [...new Set(state.photos.map(photo => photo.folder))].sort().forEach(folder => $('folder').append(new Option(folder || 'Unknown folder', folder)));
   if ([...$('folder').options].some(option => option.value === oldFolder)) $('folder').value = oldFolder;
   renderGallery();
+}
+function renderCardFormats() {
+  const summary = state.cardSummary;
+  const panel = $('card-formats');
+  panel.hidden = !summary;
+  panel.textContent = summary ? `${summary.jpeg} original JPEGs available · ${summary.raw} RAW files excluded · ${summary.other} other files excluded. JPEG+RAW pairs transfer the JPEG only; RAW is never converted.${summary.duplicateEntries ? ` ${summary.duplicateEntries} repeated listing entries were ignored.` : ''}` : '';
 }
 function connectionAdvice(code) {
   const advice = {
@@ -412,7 +420,7 @@ function renderGallery() {
   });
   $('photo-count').textContent = `${list.length} frame${list.length === 1 ? '' : 's'}${list.length !== state.photos.length ? ` of ${state.photos.length}` : ''}`;
   $('gallery-empty').hidden = list.length !== 0;
-  $('empty-description').textContent = state.photos.length ? ($('selected-only').checked ? 'No selected frames match these filters. Clear the review filter to choose more frames.' : 'Try a different filename or folder.') : 'No JPEGs were returned by this source. Try Refresh after checking the camera.';
+  $('empty-description').textContent = state.photos.length ? ($('selected-only').checked ? 'No selected frames match these filters. Clear the review filter to choose more frames.' : 'Try a different filename or folder.') : state.cardSummary?.raw ? 'This listing contains RAW files but no JPEGs. RAW transfer is not supported. Use a card reader or your existing RAW transfer app; this app never converts RAW or changes camera settings.' : 'No JPEGs were returned by this source. Try Refresh after checking the camera.';
   $('reset-filters').hidden = !state.photos.length;
   renderPagination(list.length);
   renderSelection();

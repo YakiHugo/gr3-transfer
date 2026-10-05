@@ -127,3 +127,11 @@ Close, Escape and backdrop dismissal stop pending work. The bridge aborts a
 camera connection if its requesting browser connection disappears, and ignores
 late camera responses. Cancellation keeps ready JPEGs in the tab; a failed
 bridge-disconnect acknowledgement is reported rather than presented as success.
+
+## Card format diagnostics, October 5, 2026
+
+119/119 synthetic tests pass on Node 24.19.0, including RAW-only and mixed
+JPEG+RAW cards, duplicate entries, same names in different folders, refresh,
+source switching, and excluded-name/property privacy. Listing diagnostics
+perform no original, thumbnail or RAW reads. Hardware, Mac and Android
+acceptance remain pending; these tests do not establish a real transfer.

@@ -98,18 +98,19 @@ export async function createBridge({ adapter = new CameraAdapter(), fixtureRoot 
   let controller = new AbortController();
   let state = { mode: 'disconnected', connected: false, model: 'RICOH GR III', firmware: null, battery: null };
   let photos = [];
+  let summary = null;
   let photoMap = new Map();
   const session = () => ({ ...state, csrfToken, hardwareVerified: false, sessionId: generation, photosCount: photos.length, localOnly: true });
   const reset = () => {
     controller.abort(); controller = new AbortController(); generation = randomBytes(12).toString('hex');
-    photos = []; photoMap = new Map();
+    photos = []; photoMap = new Map(); summary = null;
     state = { mode: 'disconnected', connected: false, model: 'RICOH GR III', firmware: null, battery: null };
   };
   const assign = list => {
     photos = list.map(p => ({ ...p, thumbnailUrl: `/api/photos/${p.id}/thumbnail?session=${generation}`, previewUrl: `/api/photos/${p.id}/preview?session=${generation}`, originalUrl: `/api/photos/${p.id}/original?session=${generation}` }));
     photoMap = new Map(photos.map(p => [p.id, p]));
   };
-  const photoList = () => ({ photos, mode: state.mode, hardwareVerified: false });
+  const photoList = () => ({ photos, summary, mode: state.mode, hardwareVerified: false });
 
   const server = http.createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -153,6 +154,7 @@ export async function createBridge({ adapter = new CameraAdapter(), fixtureRoot 
             signal.throwIfAborted();
             state = { mode: 'camera', connected: true, ...result.properties };
             assign(result.photos);
+            summary = result.summary || null;
           }
           json(res, 200, session()); return;
         } finally { res.off('close', abandon); }
@@ -165,7 +167,8 @@ export async function createBridge({ adapter = new CameraAdapter(), fixtureRoot 
         if (!state.connected) throw new AppError('Connect your camera or open the demo first.', 'DISCONNECTED', 409);
         const signal = controller.signal;
         if (state.mode === 'camera') {
-          const list = await adapter.list(signal); signal.throwIfAborted(); assign(list);
+          const inventory = adapter.listInventory ? await adapter.listInventory(signal) : { photos: await adapter.list(signal), summary: null };
+          signal.throwIfAborted(); assign(inventory.photos); summary = inventory.summary || null;
         }
         json(res, 200, photoList()); return;
       }

@@ -17,23 +17,37 @@ export function photoId(folder, name) {
   return createHash('sha256').update(`${folder}\0${name}`).digest('hex').slice(0, 24);
 }
 
-export function parsePhotoList(data) {
+export function parsePhotoInventory(data) {
   if (!data || !Array.isArray(data.dirs)) throw new AppError('The camera returned an unfamiliar photo list.', 'UNSUPPORTED_RESPONSE');
   const photos = new Map();
+  const seen = new Set();
+  const summary = { jpeg: 0, raw: 0, other: 0, duplicateEntries: 0 };
   for (const dir of data.dirs) {
     if (!dir || typeof dir.name !== 'string' || !SEGMENT.test(dir.name) || !Array.isArray(dir.files)) {
       throw new AppError('The camera returned an unfamiliar folder.', 'UNSUPPORTED_RESPONSE');
     }
     for (const name of dir.files) {
       if (typeof name !== 'string') throw new AppError('The camera returned an unfamiliar filename.', 'UNSUPPORTED_RESPONSE');
-      if (!/\.jpe?g$/i.test(name)) continue; // RAW/video never silently converted to JPEG.
+      const key = `${dir.name}\0${name}`;
+      if (seen.has(key)) { summary.duplicateEntries++; continue; }
+      seen.add(key);
+      if (!/\.jpe?g$/i.test(name)) {
+        if (/\.(?:dng|pef)$/i.test(name)) summary.raw++;
+        else summary.other++;
+        continue; // RAW/video never silently converted to JPEG.
+      }
       if (!JPEG.test(name)) throw new AppError('An unsafe camera filename was rejected.', 'INVALID_PHOTO_PATH');
       const id = photoId(dir.name, name);
       photos.set(id, { id, folder: dir.name, name, bytes: null, takenAt: null, width: null, height: null, synthetic: false });
       if (photos.size > 50000) throw new AppError('This card has more than 50,000 JPEGs. This prototype cannot list it safely.', 'LIST_TOO_LARGE');
     }
   }
-  return [...photos.values()].sort((a, b) => b.folder.localeCompare(a.folder) || b.name.localeCompare(a.name));
+  summary.jpeg = photos.size;
+  return { photos: [...photos.values()].sort((a, b) => b.folder.localeCompare(a.folder) || b.name.localeCompare(a.name)), summary };
+}
+
+export function parsePhotoList(data) {
+  return parsePhotoInventory(data).photos;
 }
 
 export function safeCameraProperties(data) {
@@ -122,11 +136,13 @@ export class CameraAdapter {
 
   async connect(signal) {
     const properties = safeCameraProperties(await this.json('/props', signal));
-    const photos = parsePhotoList(await this.json('/photos', signal));
-    return { properties, photos };
+    const inventory = await this.listInventory(signal);
+    return { properties, ...inventory };
   }
 
-  async list(signal) { return parsePhotoList(await this.json('/photos', signal)); }
+  async listInventory(signal) { return parsePhotoInventory(await this.json('/photos', signal)); }
+
+  async list(signal) { return (await this.listInventory(signal)).photos; }
 
   async readPhoto(photo, variant, signal, consume) {
     if (!SEGMENT.test(photo.folder) || !JPEG.test(photo.name)) throw new AppError('Invalid photo path.', 'INVALID_PHOTO_PATH', 400);

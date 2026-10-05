@@ -208,3 +208,35 @@ test('abandoning an in-flight connection aborts its camera read without a separa
   finally { clearTimeout(timer); }
   assert.equal((await (await fetch(`${base}/api/session`)).json()).connected, false);
 });
+
+test('card format inventory distinguishes RAW-only, JPEG+RAW pairs and duplicate listings without fetching files', async t => {
+  const calls = [];
+  let dirs = [{ name: '100RICOH', files: ['R1.JPG', 'R1.DNG', 'R1.JPG', 'R2.PEF', 'movie.MOV'] }, { name: '101RICOH', files: ['R1.JPG'] }];
+  const adapter = new CameraAdapter({ fetchImpl: async url => {
+    calls.push(url);
+    return data(url.endsWith('/props') ? { model: 'RICOH GR III' } : { dirs });
+  } });
+  const { base, post } = await bridge(t, adapter);
+  await post('connect', { mode: 'camera' });
+  const result = await (await fetch(`${base}/api/photos`)).json();
+  assert.equal(result.photos.length, 2);
+  assert.deepEqual(result.summary, { jpeg: 2, raw: 2, other: 1, duplicateEntries: 1 });
+  dirs = [{ name: '100RICOH', files: ['R1.DNG'] }];
+  const refreshed = await (await post('refresh', {})).json();
+  assert.equal(refreshed.photos.length, 0);
+  assert.deepEqual(refreshed.summary, { jpeg: 0, raw: 1, other: 0, duplicateEntries: 0 });
+  assert.ok(calls.every(url => url.endsWith('/props') || url.endsWith('/photos')));
+  await post('connect', { mode: 'demo' });
+  assert.equal((await (await fetch(`${base}/api/photos`)).json()).summary, null);
+});
+
+test('format diagnostics never expose excluded RAW names or untrusted camera properties', async t => {
+  const adapter = new CameraAdapter({ fetchImpl: async url => data(url.endsWith('/props')
+    ? { model: 'RICOH GR III', key: 'SECRET_WIFI' }
+    : { dirs: [{ name: '100RICOH', files: ['PRIVATE_RAW.DNG', '<script>PRIVATE.MOV'] }] }) });
+  const { base, post } = await bridge(t, adapter);
+  await post('connect', { mode: 'camera' });
+  const text = await (await fetch(`${base}/api/photos`)).text();
+  assert.doesNotMatch(text, /PRIVATE|SECRET|script/);
+  assert.equal(JSON.parse(text).summary.raw, 1);
+});

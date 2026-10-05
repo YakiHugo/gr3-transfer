@@ -123,3 +123,14 @@ a time; its temporary hashing buffer can add up to one original's size.
 
 Saving a receipt does not save its JPEG or suppress the unsaved-original warning.
 The receipt cannot prove camera origin or that Downloads contains the file.
+
+### JPEG and RAW card diagnostics
+
+The contact sheet reports unique JPEGs, excluded RAW files (`.DNG`/`.PEF`),
+other excluded files, and repeated listing entries. A JPEG+RAW capture appears
+as its JPEG only. A RAW-only card gets a specific explanation instead of a
+misleading empty-gallery message. Use your existing RAW workflow or a card
+reader for RAW originals; this app never converts them or changes the camera's
+recording settings. Counts describe the camera's returned listing, not an
+independent scan of the card. Refresh updates the counts without reading image
+contents. Duplicate names in different folders remain separate photographs.

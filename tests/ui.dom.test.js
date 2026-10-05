@@ -868,3 +868,24 @@ test('DOM: successful thumbnail retry restores image and detached stale errors c
   h.click('#refresh'); await until(() => !h.$('#refresh').disabled);
   assert.equal(h.all('.thumbnail-recovery').every(node => node.hidden), true);
 });
+
+test('DOM: RAW-only card gives explicit recovery and refresh updates JPEG+RAW diagnostics', async t => {
+  let files = ['R1.DNG'];
+  const adapter = new CameraAdapter({ fetchImpl: async url => new Response(JSON.stringify(url.endsWith('/props')
+    ? { model: 'RICOH GR III' } : { dirs: [{ name: '100RICOH', files }] }), { headers: { 'content-type': 'application/json' } }) });
+  const h = await harness(t, { adapter });
+  h.click('#landing-connect'); h.click('#confirm-connect');
+  await until(() => !h.$('#workspace').hidden && !h.$('#refresh').disabled);
+  assert.equal(h.$('#card-formats').hidden, false);
+  assert.match(h.$('#card-formats').textContent, /0 original JPEGs available · 1 RAW files excluded/);
+  assert.match(h.$('#empty-description').textContent, /RAW files but no JPEGs/);
+  assert.match(h.$('#empty-description').textContent, /card reader/);
+  files = ['R1.JPG', 'R1.DNG', 'R1.JPG'];
+  h.click('#refresh'); await until(() => h.all('.photo-card').length === 1 && !h.$('#refresh').disabled);
+  assert.match(h.$('#card-formats').textContent, /1 original JPEGs available · 1 RAW files excluded/);
+  assert.match(h.$('#card-formats').textContent, /1 repeated listing entries/);
+  h.click('#disconnect'); await until(() => !h.$('#landing').hidden && !h.$('#try-demo').disabled);
+  await h.demo();
+  assert.equal(h.$('#card-formats').hidden, true);
+  assert.equal(h.$('#card-formats').textContent, '');
+});
