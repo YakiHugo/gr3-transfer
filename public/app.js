@@ -122,6 +122,7 @@ function updateControls() {
   $('transfer').disabled = blocked || !state.selected.size;
   $('mobile-transfer').disabled = blocked || !state.selected.size;
   $('clear-queue').disabled = blocked;
+  $('select-batch').disabled = blocked || !state.session?.connected;
   $('retry-unfinished').disabled = blocked || !state.queue.some(canRetry);
   $('cancel-queue').hidden = !state.running;
   $('clear-queue').hidden = state.running;
@@ -554,6 +555,22 @@ function transferPlan() {
   else if (state.retained + state.leasedBytes + knownBytes > MEMORY_LIMIT) blocked = '这批照片超过 256 MB 暂存上限。请少选几张，或先保存并移除已完成原片。下载链接最多需要 30 秒释放。';
   return { additions, unknown, knownBytes, duplicates: selected.length - additions.length, blocked };
 }
+function selectNextBatch() {
+  if (state.busy || state.running || state.exporting || state.verifying || !state.session?.connected) return;
+  const queued = new Set(state.queue.filter(currentSource).map(entry => entry.photo.id));
+  let remaining = Math.max(0, MEMORY_LIMIT - state.retained - state.leasedBytes);
+  const slots = Math.max(0, QUEUE_LIMIT - state.queue.length), chosen = [];
+  for (const photo of filteredPhotos()) {
+    if (chosen.length >= slots) break;
+    if (queued.has(photo.id)) continue;
+    // Unknown sizes reserve the full single-file limit rather than promising a batch will fit.
+    const reserve = knownSize(photo.bytes) ? photo.bytes : FILE_LIMIT;
+    if (reserve > FILE_LIMIT || reserve > remaining) continue;
+    chosen.push(photo.id); remaining -= reserve;
+  }
+  state.selected = new Set(chosen); state.page = 1; renderGallery();
+  notify(chosen.length ? `已选择下一批 ${chosen.length} 张，仍需点击“传输原片”。未知大小按 128 MB 预留。` : '当前筛选下没有可容纳的新照片。请保存并清理原片，或调整筛选。');
+}
 function renderTransferPlan() {
   const plan = transferPlan();
   const parts = [`暂存 ${state.queue.length} / ${QUEUE_LIMIT} 项`, `已暂存 ${bytes(state.retained)}`];
@@ -905,6 +922,7 @@ $('refresh').addEventListener('click', refresh);
 $('dismiss-notice').addEventListener('click', () => { $('notice').hidden = true; });
 for (const id of ['search', 'folder', 'sort']) $(id).addEventListener(id === 'search' ? 'input' : 'change', () => { state.page = 1; renderGallery(); });
 $('select-visible').addEventListener('click', () => { currentPage().visible.forEach(photo => state.selected.add(photo.id)); renderSelection(); });
+$('select-batch').addEventListener('click', selectNextBatch);
 $('invert-visible').addEventListener('click', () => { const visible = currentPage().visible; visible.forEach(photo => { if (state.selected.has(photo.id)) state.selected.delete(photo.id); else state.selected.add(photo.id); }); if ($('selected-only').checked) renderGallery(); else renderSelection(); });
 $('clear-selection').addEventListener('click', () => { state.selected.clear(); if ($('selected-only').checked) renderGallery(); else renderSelection(); });
 $('selected-only').addEventListener('change', () => { state.page = 1; renderGallery(); });
