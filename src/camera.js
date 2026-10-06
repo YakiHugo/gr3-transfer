@@ -19,6 +19,8 @@ export function photoId(folder, name) {
 
 export function parsePhotoInventory(data) {
   if (!data || !Array.isArray(data.dirs)) throw new AppError('The camera returned an unfamiliar photo list.', 'UNSUPPORTED_RESPONSE');
+  if (data.dirs.length > 10000) throw new AppError('The card returned too many folders.', 'LIST_TOO_LARGE');
+  let listedEntries = 0;
   const photos = new Map();
   const seen = new Set();
   const rawPairs = new Map();
@@ -28,7 +30,8 @@ export function parsePhotoInventory(data) {
       throw new AppError('The camera returned an unfamiliar folder.', 'UNSUPPORTED_RESPONSE');
     }
     for (const name of dir.files) {
-      if (typeof name !== 'string') throw new AppError('The camera returned an unfamiliar filename.', 'UNSUPPORTED_RESPONSE');
+      if (++listedEntries > 100000) throw new AppError('The card returned more than 100,000 file entries.', 'LIST_TOO_LARGE');
+      if (typeof name !== 'string' || name.length > 512) throw new AppError('The camera returned an unfamiliar filename.', 'UNSUPPORTED_RESPONSE');
       const key = `${dir.name}\0${name}`;
       if (seen.has(key)) { summary.duplicateEntries++; continue; }
       seen.add(key);

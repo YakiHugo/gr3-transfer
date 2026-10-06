@@ -273,3 +273,18 @@ test('inventory: RAW companion badges use safe same-folder stems without exposin
   assert.equal(photos.find(p=>p.name==='R2.JPG').rawCompanions, undefined);
   assert.equal(photos.length,3); assert.doesNotMatch(JSON.stringify(photos), /R2.DNG|r1.dng|R1.PEF/);
 });
+
+
+test('inventory: limits all card entries, including excluded formats and repeated names', () => {
+  const files = Array(100000).fill('R1.DNG');
+  assert.deepEqual(parsePhotoList({dirs:[{name:'100RICOH', files}]}),[]);
+  files.push('R1.DNG');
+  assert.throws(() => parsePhotoList({dirs:[{name:'100RICOH',files}]}), e=>e.code==='LIST_TOO_LARGE');
+  assert.throws(() => parsePhotoList({dirs:[{name:'100RICOH',files:['x'.repeat(513)]}]}), e=>e.code==='UNSUPPORTED_RESPONSE');
+  assert.throws(() => parsePhotoList({dirs:Array(10001).fill({name:'100RICOH',files:[]})}),e=>e.code==='LIST_TOO_LARGE');
+});
+
+test('inventory: entry budget spans folders rather than resetting for each folder', () => {
+  const files=Array(50001).fill('R1.JPG');
+  assert.throws(() => parsePhotoList({dirs:[{name:'100RICOH',files},{name:'101RICOH',files}]}),e=>e.code==='LIST_TOO_LARGE');
+});

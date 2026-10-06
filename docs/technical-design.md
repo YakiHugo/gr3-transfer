@@ -175,3 +175,7 @@ force-stop recovery. This is not physical GR III or phone acceptance. The
 Android README records exact test counts, test-build limitations and the
 remaining hardware checklist. The desktop browser's phone-networking limits
 above still apply to that separate browser interface.
+
+
+### Bounded card inventory
+The desktop parser bounds the whole listing to 100,000 entries (including RAW, other formats, and repeats), 10,000 directory records, and 512 characters per raw filename, before admitting at most 50,000 safe JPEG paths. Excess listings fail explicitly instead of consuming unbounded parser memory or silently returning a partial card.
