@@ -244,6 +244,7 @@ async function connect(mode) {
     $('search').value = '';
     $('folder').value = '';
     $('selected-only').checked = false;
+    $('unqueued-only').checked = false;
     const result = await api('/api/photos');
     if (generation !== state.generation) return;
     applyPhotos(result);
@@ -352,7 +353,8 @@ function filteredPhotos() {
 }
 function currentPage() {
   const filtered = filteredPhotos();
-  const list = $('selected-only').checked ? filtered.filter(photo => state.selected.has(photo.id)) : filtered;
+  const queued = $('unqueued-only').checked ? new Set(state.queue.filter(currentSource).map(entry => entry.photo.id)) : null;
+  const list = filtered.filter(photo => (!$('selected-only').checked || state.selected.has(photo.id)) && (!queued || !queued.has(photo.id)));
   state.page = Math.max(1, Math.min(state.page, Math.ceil(list.length / PAGE_SIZE) || 1));
   return { list, visible: list.slice((state.page - 1) * PAGE_SIZE, state.page * PAGE_SIZE) };
 }
@@ -692,6 +694,7 @@ function renderQueue() {
     }
     $('queue-list').append(row);
   });
+  if ($('unqueued-only').checked && state.session?.connected) renderGallery();
   updateQueueSummary();
   renderRecovery();
   placeTray();
@@ -925,9 +928,10 @@ $('select-visible').addEventListener('click', () => { currentPage().visible.forE
 $('select-batch').addEventListener('click', selectNextBatch);
 $('invert-visible').addEventListener('click', () => { const visible = currentPage().visible; visible.forEach(photo => { if (state.selected.has(photo.id)) state.selected.delete(photo.id); else state.selected.add(photo.id); }); if ($('selected-only').checked) renderGallery(); else renderSelection(); });
 $('clear-selection').addEventListener('click', () => { state.selected.clear(); if ($('selected-only').checked) renderGallery(); else renderSelection(); });
+$('unqueued-only').addEventListener('change', () => { state.page = 1; renderGallery(); });
 $('selected-only').addEventListener('change', () => { state.page = 1; renderGallery(); });
 $('deselect-visible').addEventListener('click', () => { currentPage().visible.forEach(photo => state.selected.delete(photo.id)); if ($('selected-only').checked) renderGallery(); else renderSelection(); });
-$('reset-filters').addEventListener('click', () => { $('selected-only').checked = false; $('search').value = ''; $('folder').value = ''; state.page = 1; renderGallery(); });
+$('reset-filters').addEventListener('click', () => { $('selected-only').checked = false; $('unqueued-only').checked = false; $('search').value = ''; $('folder').value = ''; state.page = 1; renderGallery(); });
 $('preview-previous').addEventListener('click', () => navigatePreview(-1));
 $('preview-next').addEventListener('click', () => navigatePreview(1));
 $('preview-dialog').addEventListener('keydown', event => {

@@ -977,3 +977,13 @@ test('DOM: next batch conservatively reserves unknown sizes and never exceeds qu
   h.click('#select-batch'); assert.equal(h.$('#selection-count').textContent, '2');
   assert.equal(h.all('.queue-item').length, 0);
 });
+
+
+test('DOM: hide queued photos updates after transfer and removal without dropping selected IDs', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input');
+  h.$('#unqueued-only').checked = true; h.$('#unqueued-only').dispatchEvent(new h.window.Event('change'));
+  h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  assert.equal(h.all('.photo-card').length, 11); assert.equal(h.$('#selection-count').textContent, '1');
+  h.click('.queue-remove'); assert.equal(h.all('.photo-card').length, 12);
+  h.click('#reset-filters'); assert.equal(h.$('#unqueued-only').checked, false);
+});
