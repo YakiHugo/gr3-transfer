@@ -987,3 +987,16 @@ test('DOM: hide queued photos updates after transfer and removal without droppin
   h.click('.queue-remove'); assert.equal(h.all('.photo-card').length, 12);
   h.click('#reset-filters'); assert.equal(h.$('#unqueued-only').checked, false);
 });
+
+
+test('DOM: bulk handoff cleanup requires disk confirmation and preserves unsaved originals and download leases', async t => {
+  const h = await harness(t); await h.demo(); h.click('#select-visible'); h.click('#transfer');
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 12);
+  h.click('.queue-item-top button'); assert.equal(h.$('#clear-handed').hidden, false);
+  let prompt = ''; h.window.confirm = value => { prompt = value; return false; }; h.click('#clear-handed');
+  assert.match(prompt, /不代表已写入磁盘/); assert.equal(h.all('.queue-item').length, 12);
+  h.window.confirm = () => true; h.click('#clear-handed');
+  assert.equal(h.all('.queue-item').length, 11); assert.equal(h.all('.queue-item[data-state="ready"]').length, 11);
+  assert.equal(h.blobs.size, 12, '11 unsaved originals plus active handoff lease');
+  assert.equal(h.$('#clear-handed').hidden, true);
+});
