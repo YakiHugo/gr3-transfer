@@ -176,6 +176,18 @@ public final class CoreTests {
         retries.get(2).status=TransferTray.Status.READY;check(retryTray.retry(SESSION,retries.get(2).key).isEmpty(),"per-item retry preserves ready original");
         check(retryTray.retry(SESSION,"unknown").isEmpty(),"per-item retry rejects missing key");
         check(retryTray.retry(SESSION,retries.get(1).key).size()==1&&retries.get(1).attempts==0,"unstarted cancellation retries without incrementing until actual transfer");
+        TransferTray removeTray=new TransferTray();TransferTray.Entry removable=removeTray.admit(SESSION,List.of(photo),false).get(0);
+        for(TransferTray.Status active:List.of(TransferTray.Status.QUEUED,TransferTray.Status.TRANSFERRING,TransferTray.Status.SAVING)){removable.status=active;check(removeTray.remove(removable.key,true)==TransferTray.RemoveResult.BUSY,"removal rejects active entry "+active);}
+        removable.status=TransferTray.Status.READY;removable.receipt=minimal;removable.file=File.createTempFile("gr3-removal-",".jpg");File removedOriginal=removable.file;
+        check(removeTray.remove(removable.key,false)==TransferTray.RemoveResult.UNSAVED&&removedOriginal.exists()&&removeTray.all().size()==1,"unsaved removal requires explicit confirmation");
+        check(removeTray.remove(removable.key,true)==TransferTray.RemoveResult.REMOVED&&!removedOriginal.exists()&&removeTray.all().isEmpty(),"confirmed item removal deletes only its staged original");
+        check(removeTray.remove(removable.key,true)==TransferTray.RemoveResult.NOT_FOUND,"repeated removal is harmless");
+        removable=removeTray.admit(SESSION,List.of(photo),false).get(0);removable.status=TransferTray.Status.FAILED;
+        File blocked=Files.createTempDirectory("gr3-blocked-removal-").toFile();File child=new File(blocked,"keep");Files.write(child.toPath(),new byte[]{1});removable.file=blocked;
+        check(removeTray.remove(removable.key,true)==TransferTray.RemoveResult.DELETE_FAILED&&removeTray.all().size()==1,"failed cache deletion retains retryable record");child.delete();blocked.delete();removable.file=null;
+        check(removeTray.remove(removable.key,false)==TransferTray.RemoveResult.REMOVED,"failed entry without original removes without unsaved confirmation");
+        removable=removeTray.admit(SESSION,List.of(photo),false).get(0);removable.status=TransferTray.Status.SAVED;removable.receipt=minimal;removable.savedUri="content://saved/unchanged";
+        check(removeTray.remove(removable.key,false)==TransferTray.RemoveResult.REMOVED&&removable.savedUri.equals("content://saved/unchanged"),"saved item removal does not touch published URI");
         System.out.println("PASS "+tests+" native Android core assertions; no camera/network/device contacted");
     }
 }

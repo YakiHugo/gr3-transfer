@@ -267,6 +267,13 @@ final class TransferController {
         if(busy)return;
         int count=tray.clearSaved();status="已清理 "+count+" 条已保存记录，未保存原片和相册照片均保留。";changed();
     }
+    synchronized TransferTray.RemoveResult remove(String key, boolean discardUnsaved) {
+        if(busy)return TransferTray.RemoveResult.BUSY;
+        TransferTray.RemoveResult result=tray.remove(key,discardUnsaved);
+        if(result==TransferTray.RemoveResult.REMOVED)status="这条导入记录已移除，相机文件和已保存的相册照片不受影响。";
+        else if(result==TransferTray.RemoveResult.DELETE_FAILED)status="临时副本暂时无法清理，记录已保留，请稍后重试。";
+        changed();return result;
+    }
     synchronized void clear() { if (busy) return; tray.clear(); status = "导入记录已清空，已保存的照片不受影响。"; changed(); }
     private static String message(Exception error, CancelToken token) {
         if (token.isCancelled()) return "操作已取消，可重新连接或重试。";

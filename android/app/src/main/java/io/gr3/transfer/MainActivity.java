@@ -242,11 +242,19 @@ public final class MainActivity extends Activity {
             .setNegativeButton("保留原片",null).setPositiveButton("清除临时副本",(d,w)->controller.clear()).show();
         else controller.clear();
     }
+    private void removeEntry(TransferTray.Entry entry) {
+        TransferTray.RemoveResult result=controller.remove(entry.key,false);
+        if(result==TransferTray.RemoveResult.UNSAVED)new AlertDialog.Builder(this).setTitle("移除这张未保存的原片？")
+            .setMessage(entry.photo.name+" 的临时副本将被删除。相机文件及已经保存到相册的照片不会改变。")
+            .setNegativeButton("保留原片",null).setPositiveButton("移除临时副本",(d,w)->controller.remove(entry.key,true)).show();
+        else if(result==TransferTray.RemoveResult.BUSY)Toast.makeText(this,"请先等待当前操作完成，或取消操作",Toast.LENGTH_SHORT).show();
+    }
     private void entryDetails(TransferTray.Entry entry) {
         String value="文件夹："+entry.photo.folder+"\n状态："+stateLabel(entry.status)+"\n尝试次数："+entry.attempts+" / 3\n来源会话："+entry.session.substring(0,8)+"\n"+entry.message;
         if(entry.receipt!=null)value+="\n\n文件大小："+size(entry.receipt.bytes)+"\nSHA-256\n"+entry.receipt.sha256+"\n\n此校验值用于核对收到的字节，并非相机提供的校验值。如需端到端验证，请与读卡器导出的原片比较。";
         TextView details=text(value,14,false);details.setTextIsSelectable(true);details.setPadding(dp(24),dp(10),dp(24),dp(10));ScrollView body=new ScrollView(this);body.addView(details);
-        new AlertDialog.Builder(this).setTitle(entry.photo.name).setView(body).setPositiveButton("关闭",null).show();
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle(entry.photo.name).setView(body).setPositiveButton("关闭",null).setNeutralButton("移除记录",(d,w)->removeEntry(entry)).create();
+        dialog.show();dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(!controller.busy);
     }
     private void openSaved(TransferTray.Entry entry) {
         Intent intent=new Intent(Intent.ACTION_VIEW).setDataAndType(android.net.Uri.parse(entry.savedUri),"image/jpeg").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);

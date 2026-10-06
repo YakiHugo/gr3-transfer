@@ -138,6 +138,12 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
         runOnMainSync(()->check(find(activity.getWindow().getDecorView(),"选择要导入的照片")!=null,"clear selection updates docked action"));
         runOnMainSync(()->{controller.refresh();controller.cancel();});awaitIdle();
         synchronized(controller){check(controller.connected&&controller.demo&&source.equals(controller.session)&&controller.inventory.photos.size()==12,"cancelled refresh retains connected inventory");}
+        click(first.name);click("导入原片（1）");awaitIdle();
+        TransferTray.Entry entry=controller.entries().get(0);File cached=entry.file;
+        click("详情");clickDialog("移除记录");clickDialog("保留原片");
+        synchronized(controller){check(controller.entries().size()==1&&cached.exists(),"declined individual removal retains original");}
+        click("详情");clickDialog("移除记录");clickDialog("移除临时副本");waitForIdleSync();
+        synchronized(controller){check(controller.entries().isEmpty()&&!cached.exists(),"confirmed individual removal clears only selected original");}
     }
     private void verifyLayout()throws Exception {
         runOnMainSync(()->controller.loadThumbnails(controller.inventory.photos));awaitIdle();
