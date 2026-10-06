@@ -167,6 +167,15 @@ public final class CoreTests {
         check(mixedTray.clearSaved()==0,"repeated clear saved is idempotent");
         mixed.get(2).status=TransferTray.Status.SAVED;check(mixedTray.clearSaved()==0,"status without published URI is not discarded as saved");
         check(mixedTray.admit(SESSION,List.of(gallery.get(0)),false).size()==1,"clearing saved record frees its tray slot");mixedTray.clear();
+        TransferTray retryTray=new TransferTray();List<TransferTray.Entry> retries=retryTray.admit(SESSION,gallery,false);
+        retries.get(0).status=TransferTray.Status.FAILED;retries.get(0).attempts=1;retries.get(1).status=TransferTray.Status.CANCELLED;
+        check(retryTray.retry(SESSION,retries.get(0).key).equals(List.of(retries.get(0)))&&retries.get(1).status==TransferTray.Status.CANCELLED,"per-item retry queues only requested failed item");
+        check(retryTray.retry(SESSION,retries.get(0).key).isEmpty(),"repeated retry cannot enqueue queued entry twice");
+        check(retryTray.retry(second,retries.get(1).key).isEmpty()&&retries.get(1).status==TransferTray.Status.CANCELLED,"per-item retry rejects old source session");
+        retries.get(0).status=TransferTray.Status.FAILED;retries.get(0).attempts=3;check(retryTray.retry(SESSION,retries.get(0).key).isEmpty(),"per-item retry enforces three-attempt cap");
+        retries.get(2).status=TransferTray.Status.READY;check(retryTray.retry(SESSION,retries.get(2).key).isEmpty(),"per-item retry preserves ready original");
+        check(retryTray.retry(SESSION,"unknown").isEmpty(),"per-item retry rejects missing key");
+        check(retryTray.retry(SESSION,retries.get(1).key).size()==1&&retries.get(1).attempts==0,"unstarted cancellation retries without incrementing until actual transfer");
         System.out.println("PASS "+tests+" native Android core assertions; no camera/network/device contacted");
     }
 }

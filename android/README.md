@@ -176,6 +176,8 @@ end-to-end proof, compare a saved file with a card-reader copy.
 
 ## Cancellation, retry and lifecycle
 
+Each eligible failed/cancelled card offers “重试这张”, alongside the existing batch retry, so one problem photo can be retried without restarting other failures. Both paths use the same session and three-attempt guards.
+
 Cancel preserves completed cache originals. Retry restarts a failed/cancelled
 original from byte zero, at most three attempts per entry. It never assumes
 HTTP Range support. Ready/saved entries are not retransferred in the same

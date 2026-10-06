@@ -142,11 +142,13 @@ final class TransferController {
         }
         worker.execute(() -> downloadBatch(batch, operation));
     }
-    void retry() {
+    void retry() { retryEntries(null); }
+    void retry(String key) { if(key!=null)retryEntries(key); }
+    private void retryEntries(String key) {
         List<TransferTray.Entry> batch; CancelToken operation;
         synchronized (this) {
             if (busy || !connected) return;
-            batch = tray.retry(session);
+            batch = key==null?tray.retry(session):tray.retry(session,key);
             if (batch.isEmpty()) { status = "当前没有可重试的照片。重新连接后请再次选片；每张最多尝试 3 次。"; changed(); return; }
             operation = begin("正在重新导入未完成的原片…");
         }
