@@ -651,11 +651,17 @@ function itemStatus(entry) {
   if (entry.status === 'cancelled') return `已取消 · 未保存文件${entry.attempts >= MAX_ATTEMPTS ? ' · 已达到重试上限，请检查连接后移除并重新选择。' : ''}`;
   return entry.error || '传输失败 · 未保存文件';
 }
+function visibleQueueEntries() {
+  const filter = $('queue-filter').value;
+  return state.queue.filter(entry => filter === 'ready' ? unhandedOriginal(entry) : filter === 'unfinished' ? unfinished(entry) : filter === 'handed' ? entry.status === 'handed-off' || entry.archiveHandedOff : filter === 'waiting' ? ['queued', 'transferring'].includes(entry.status) : true);
+}
 function renderQueue() {
   if (!state.running) state.queue.filter(entry => entry.status === 'queued' && !currentSource(entry)).forEach(entry => { entry.status = 'cancelled'; });
   $('queue-panel').hidden = state.queue.length === 0;
   $('queue-list').replaceChildren();
-  state.queue.forEach(entry => {
+  const visibleEntries = visibleQueueEntries();
+  $('queue-empty-filter').hidden = !state.queue.length || visibleEntries.length > 0;
+  visibleEntries.forEach(entry => {
     const row = element('article', 'queue-item');
     row.id = `queue-${entry.id}`;
     row.dataset.state = entry.status;
@@ -968,6 +974,7 @@ $('mobile-transfer').addEventListener('click', () => { addToQueue(); if (state.q
 $('pause-queue').addEventListener('click', () => { if (state.running) { state.pauseRequested = !state.pauseRequested; updateControls(); updateQueueSummary(); } });
 $('resume-queue').addEventListener('click', () => { if (state.session?.connected) runQueue(); });
 $('cancel-queue').addEventListener('click', cancelQueue);
+$('queue-filter').addEventListener('change', renderQueue);
 $('clear-queue').addEventListener('click', clearQueue);
 $('clear-handed').addEventListener('click', clearHandedOff);
 $('retry-unfinished').addEventListener('click', () => retryEntries(state.queue));

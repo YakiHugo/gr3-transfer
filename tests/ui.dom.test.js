@@ -1031,3 +1031,14 @@ test('DOM: a paused batch can be cancelled without dropping its completed origin
   h.click('#cancel-queue'); assert.equal(h.all('.queue-item[data-state="cancelled"]').length, 11);
   assert.equal(h.all('.queue-item[data-state="ready"]').length, 1); assert.equal(h.$('#resume-queue').hidden, true);
 });
+
+
+test('DOM: queue status filters preserve batch totals and originals while showing empty states', async t => {
+  const h = await harness(t); await h.demo(); h.change('#folder','100RICOH'); h.click('#select-visible'); h.click('#transfer');
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 6); h.click('.queue-item-top button');
+  h.change('#queue-filter','handed'); assert.equal(h.all('.queue-item').length,1); assert.equal(h.$('#queue-count').textContent,'6');
+  h.change('#queue-filter','ready'); assert.equal(h.all('.queue-item').length,5);
+  h.change('#queue-filter','unfinished'); assert.equal(h.all('.queue-item').length,0); assert.equal(h.$('#queue-empty-filter').hidden,false);
+  assert.equal(h.$('#build-archive').disabled,false);
+  h.change('#queue-filter','all'); assert.equal(h.all('.queue-item').length,6); assert.equal(h.$('#queue-empty-filter').hidden,true);
+});
