@@ -958,3 +958,22 @@ test('DOM: invert page respects folder filters and leaves off-page selections in
   h.click('#invert-visible'); assert.equal(h.$('#selection-count').textContent, '6');
   assert.equal(h.all('.photo-card').length, 0);
 });
+
+
+test('DOM: next batch skips queued originals, follows filters, and requires explicit transfer', async t => {
+  const h = await harness(t); await h.demo(); h.change('#folder', '100RICOH');
+  h.click('.photo-select input'); h.click('#transfer');
+  await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  h.click('#select-batch'); assert.equal(h.$('#selection-count').textContent, '5');
+  assert.equal(h.all('.queue-item').length, 1);
+  h.click('#transfer'); await until(() => h.all('.queue-item[data-state="ready"]').length === 6);
+  h.click('#select-batch'); assert.equal(h.$('#selection-count').textContent, '0');
+});
+
+test('DOM: next batch conservatively reserves unknown sizes and never exceeds queue capacity', async t => {
+  const adapter = { connect: async () => ({ properties: { model: 'RICOH GR III' }, photos: Array.from({length: 60}, (_,i) => ({id: i.toString(16).padStart(24,'0'), folder:'100RICOH', name:`R${i}.JPG`, bytes:null})) }) };
+  const h = await harness(t, {adapter}); h.click('#landing-connect'); h.click('#confirm-connect');
+  await until(() => h.all('.photo-card').length === 24 && !h.$('#select-batch').disabled);
+  h.click('#select-batch'); assert.equal(h.$('#selection-count').textContent, '2');
+  assert.equal(h.all('.queue-item').length, 0);
+});
