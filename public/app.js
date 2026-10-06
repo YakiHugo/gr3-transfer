@@ -336,7 +336,8 @@ function filteredPhotos() {
   const folder = $('folder').value;
   const sort = $('sort').value;
   if (galleryCache && galleryCache.photos === state.photos && galleryCache.query === query && galleryCache.folder === folder && galleryCache.sort === sort) return galleryCache.list;
-  const list = state.photos.filter(photo => (!folder || photo.folder === folder) && (!query || photo.name.toLocaleLowerCase().includes(query)));
+  const terms = query.split(/\s+/).filter(Boolean);
+  const list = state.photos.filter(photo => (!folder || photo.folder === folder) && terms.every(term => `${photo.folder}/${photo.name}`.toLocaleLowerCase().includes(term)));
   const nameCompare = (a, b) => photoNameCollator.compare(a.name, b.name) || photoFolderCollator.compare(a.folder, b.folder);
   list.sort((a, b) => {
     if (sort === 'name-asc') return nameCompare(a, b);

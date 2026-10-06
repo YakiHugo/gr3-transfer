@@ -61,3 +61,12 @@ test('gallery: search, folder, sorting, refresh and session replacement invalida
   assert.notEqual(g.list(), original);
   g.state.photos = []; assert.equal(g.page().visible.length, 0); assert.equal(g.state.page, 1);
 });
+
+
+test('gallery: multi-term search matches folder and filename without regex interpretation', () => {
+  const g = gallery([photo('a', 'R1.JPG'), photo('b', 'R1.JPG', '101RICOH'), photo('c', 'R2.JPG')]);
+  g.controls.search = ' 100ricoh   r1 '; assert.deepEqual(ids(g.list()), ['a']);
+  g.controls.search = '101RICOH/R1'; assert.deepEqual(ids(g.list()), ['b']);
+  g.controls.search = '.*'; assert.deepEqual(ids(g.list()), []);
+  g.controls.search = 'r1'; assert.deepEqual(ids(g.list()), ['a', 'b']);
+});
