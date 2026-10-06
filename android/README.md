@@ -149,9 +149,11 @@ and `DEMO_` filename prefix.
   camera writes, capture, deletion, transfer-flag changes, RAW conversion or
   guessed pagination. Sensitive camera properties are ignored and never logged
 - Original paths have **no size query**. Only thumbnails use `?size=thumb`
-- Incoming originals stream into app-private temporary cache with incremental
-  JPEG marker validation, length checks when available, and SHA-256. No decode,
-  recompression, rotation or EXIF rewriting occurs on the original path
+- Incoming originals stream into app-private `.part` files with incremental JPEG
+  marker validation, length checks when available, and SHA-256. Completed originals
+  and checksummed metadata are committed with atomic renames in Android's
+  `noBackupFilesDir`, rather than evictable cache. No decode, recompression,
+  rotation or EXIF rewriting occurs on the original path
 - Up to 48 tray entries, 128 MiB per JPEG and 256 MiB of retained private originals;
   one camera read at a time. JSON is bounded to 8 MiB, 16 nested levels and
   200,000 parser values; listing is capped at 100,000 entries / 50,000 JPEGs
@@ -164,8 +166,10 @@ and `DEMO_` filename prefix.
   state. Existing photos are never overwritten. Camera folder + random session
   prefix distinguishes names; MediaStore handles any remaining name collision
 - Failure/cancellation removes only the newly created still-pending row and
-  preserves the original cache for retry. A private journal retries unfinished
-  pending cleanup on startup. Published rows are never deleted by cleanup,
+  preserves the private original for retry. Before any publication, the original's
+  durable record stores the exact newly created MediaStore item URI. A separate
+  pending journal retries unfinished cleanup on startup. Published rows are never
+  deleted by cleanup,
   including when a process dies after publishing but before journal removal
 - The small insert-before-journal crash window is handled by MediaStore's own
   pending-item expiry. No whole-library scan is performed to find such rows
@@ -182,7 +186,7 @@ end-to-end proof, compare a saved file with a card-reader copy.
 
 Each eligible failed/cancelled card offers “重试这张”, alongside the existing batch retry, so one problem photo can be retried without restarting other failures. Both paths use the same session and three-attempt guards.
 
-Cancel preserves completed cache originals. Retry restarts a failed/cancelled
+Cancel preserves completed private originals. Retry restarts a failed/cancelled
 original from byte zero, at most three attempts per entry. It never assumes
 HTTP Range support. Ready/saved entries are not retransferred in the same
 session; same filenames in different folders remain distinct.
@@ -197,14 +201,55 @@ and page state. Leaving the foreground cancels unfinished work; it is not a
 background-transfer service. A confirmed save already published is never undone
 by subsequent cancellation. Declining a save does not call the save transaction.
 
-**Ready files are temporary private cache, not durable storage.** The UI warns to
-save before leaving and asks before Back/Clear could abandon unsaved originals.
-If Android kills the process, the tray is lost; startup discards this app's orphan
-cache files and removes its recorded unfinished pending rows. Files already
-published to Pictures survive. The native instrumentation includes a separate prepare / force-stop / restart
-check: it creates a synthetic published image, an app-owned pending row and an
-orphan cache file, then verifies pending cleanup preserves the published bytes.
-Real-phone lifecycle behavior still needs the hardware checklist below.
+**Completed originals survive an ordinary app/process restart in private storage.**
+Startup checks each bounded metadata record and recomputes JPEG structure, actual
+length and SHA-256 from its original file. Missing/corrupt records are rejected
+from the tray, but suspect completed JPEGs are preserved in quarantine and still
+count against physical storage limits. Only provably unfinished `.part` files and
+old evictable-cache files are automatically discarded. Clearing all import records
+explicitly warns that quarantined originals are included. Only
+completed originals restore, never an unfinished transfer or a camera connection.
+Every restored card explicitly represents an old source and cannot retry against
+any camera session, even its prior session token. Demo mode and RAW enum labels
+are preserved; no RAW/asset request path or camera credential is persisted.
+
+Crash safety also covers saving: the exact app-created MediaStore URI is committed
+before copying/publishing. Startup removes only journaled pending rows, then checks
+that exact URI. A published JPEG with matching length/hash is marked saved without
+another insertion; a proven absent row can be explicitly saved again. An
+unavailable provider, still-pending row or changed bytes yields **保存结果待确认**;
+that card keeps its private original and cannot save/retry until restart can
+establish the prior outcome. No filename-based saved inference or whole-library
+query is used. Removing such a card still requires discarding its unsaved private
+copy and never deletes a published photo.
+
+Removing/clearing commits an atomic removal tombstone before cleaning metadata
+and bytes, so interruption cannot restore an explicitly removed original. Once
+committed, removal is reported as complete even if unlink fails, with a cleanup-pending
+notice; startup retries that cleanup. These remaining physical bytes continue to
+consume the limits. If the tombstone cannot commit, the original really remains
+retained and removal reports failure. Saved records are removed from
+private recovery after publication; this is not a persistent saved-photo history.
+Limits remain 48 entries, 128 MiB per original and 256 MiB retained originals,
+including quarantined and cleanup-pending physical copies. Over-limit or suspect
+existing files block new admission instead of being silently deleted.
+Metadata is bounded to 4 KiB per record, paths use generated UUID basenames, and
+file opens reject symlinks. Atomic replacement keeps the preceding valid record
+when a journal write fails. A startup storage error blocks new transfers rather
+than bypassing retained-byte accounting.
+
+Private originals are excluded from cloud backup/device transfer and are deleted
+by uninstall or clearing app data. This is process-restart recovery, not a backup
+or a guarantee against filesystem/device failure. Save to Pictures for durable
+user-managed copies. Real-phone lifecycle behavior still needs hardware checks.
+
+The native harness now has two real force-stop/restart boundaries. It prepares
+completed, published-but-not-finalized, interrupted-save, uncertain-save and
+removed synthetic entries; verifies exact-byte recovery and publication handling;
+saves a recovered original with UI confirmation; clears a fresh completed entry;
+then restarts again and checks no saved/removed/cleared entry resurrects while
+published photos retain their original bytes. These new runtime checks require
+execution of the exact commit, not the historical emulator results above.
 
 ## Hardware acceptance checklist
 
@@ -258,3 +303,17 @@ run, and the hardware checklist remains open.
   audits passed locally; new APK compilation, lint and runtime results must be
   read from the exact-commit hosted jobs before declaring the changes validated.
   Historical emulator results above do not cover these new features
+
+### Completed-original restart recovery (2026-10-06)
+
+- SDK-free JVM: **361 assertions** pass locally (299 protocol/tray/save assertions
+  plus 62 production file-journal assertions); source safety audit and diff checks pass
+- New file-journal tests cover verified roundtrip, original/demo/RAW metadata, old-source
+  retry exclusion, pre-publication destination durability, failed atomic replacement,
+  truncated/corrupt records and JPEGs, missing originals, symlink/traversal rejection,
+  count/byte limits, unfinished file cleanup, corrupt-record/intact-JPEG preservation,
+  failed post-commit cleanup, failed-admission cleanup and remove/clear non-resurrection
+- Native lifecycle tests are updated, not disabled. No local Android SDK or emulator
+  is available for this change: lint/APK compilation and all runtime assertions must
+  pass on the final hosted commit before this feature is considered verified
+- Physical GR III, Android phone and modern Android runtime remain unverified

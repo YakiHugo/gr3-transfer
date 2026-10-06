@@ -53,7 +53,7 @@ public final class MainActivity extends Activity {
     @Override public void onBackPressed() { leave(); }
     private void leave() {
         if (controller.busy || controller.hasUnsaved()) new AlertDialog.Builder(this).setTitle("还有原片未保存")
-            .setMessage("离开会取消未完成的操作。待保存的原片只是临时副本，Android 关闭应用后可能丢失。建议先保存到相册。")
+            .setMessage("离开会取消未完成的操作。已完成原片保留在应用内，重新打开后会校验并恢复；清除应用数据或卸载会删除副本。建议保存到相册。")
             .setNegativeButton("继续使用",null).setPositiveButton("仍然离开",(dialog,which) -> { controller.cancel(); finish(); }).show();
         else finish();
     }
@@ -190,7 +190,7 @@ public final class MainActivity extends Activity {
         if(controller.connected){labels.add("断开连接");actions.add(controller::disconnect);labels.add("照片与连接详情");actions.add(this::connectionDetails);}
         long savedCount=controller.entries().stream().filter(e->e.status==TransferTray.Status.SAVED&&e.savedUri!=null).count();
         if(savedCount>0){labels.add("清理已保存记录（"+savedCount+"）");actions.add(controller::clearSaved);}
-        if(!controller.entries().isEmpty()){labels.add("清空导入记录");actions.add(this::clearTray);}
+        if(!controller.entries().isEmpty()||controller.hasUnsaved()){labels.add("清空导入记录");actions.add(this::clearTray);}
         labels.add("使用与隐私说明");actions.add(this::privacy);
         new AlertDialog.Builder(this).setTitle("更多选项").setItems(labels.toArray(new String[0]),(dialog,which)->{
             if(controller.busy){Toast.makeText(this,"请先等待当前操作完成，或取消操作",Toast.LENGTH_SHORT).show();return;}actions.get(which).run();
@@ -200,7 +200,7 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("照片与连接详情").setMessage("JPEG："+controller.inventory.photos.size()+" 张\n已排除 RAW："+controller.inventory.raw+" 张\n其他文件："+controller.inventory.other+" 个\n重复记录："+controller.inventory.duplicate+" 条\n\n"+(controller.demo?"当前使用生成的演示图片，不会连接相机。":"使用已连接的 Wi-Fi，固定访问 192.168.0.1。不会修改手机默认网络或相机文件。")+"\n\n临时空间："+size(controller.stagedBytes())+" / 256 MiB").setPositiveButton("知道了",null).show();
     }
     private void privacy() {
-        new AlertDialog.Builder(this).setTitle("使用与隐私说明").setMessage("仅支持 RICOH GR III 的 JPEG，暂不支持 RAW、GR IIIx 或 GR IV。Android 10 及以上可用，测试版尚未经过真实相机和手机验证。\n\n应用不读取相册、位置、蓝牙或 Wi-Fi 密码，不自动加入网络，也不改变系统网络设置。请先在手机设置中连接相机 Wi-Fi，并保持相机唤醒。\n\n只通过已连接的 Wi-Fi 读取固定相机地址，不上传照片、不采集统计数据、不修改相机文件。相机使用未加密的本地 HTTP，请仅使用可信的相机 Wi-Fi。\n\n原片不会重编码或修改 EXIF。导入后先保留临时副本，须再次确认保存才能写入 Pictures。关闭应用后临时文件可能丢失。\n\n保存后，Android 或相册应用可能按你已开启的设置自动云备份。演示图片单独存放在 GR III Transfer Demo 文件夹。")
+        new AlertDialog.Builder(this).setTitle("使用与隐私说明").setMessage("仅支持 RICOH GR III 的 JPEG，暂不支持 RAW、GR IIIx 或 GR IV。Android 10 及以上可用，测试版尚未经过真实相机和手机验证。\n\n应用不浏览整个相册，不读取位置、蓝牙或 Wi-Fi 密码，不自动加入网络，也不改变系统网络设置。请先在手机设置中连接相机 Wi-Fi，并保持相机唤醒。\n\n只通过已连接的 Wi-Fi 读取固定相机地址，不上传照片、不采集统计数据、不修改相机文件。相机使用未加密的本地 HTTP，请仅使用可信的相机 Wi-Fi。\n\n原片不会重编码或修改 EXIF。完整原片保留在应用私有空间，重启后重新校验并恢复，不会自动连接或重试相机。须再次确认保存才能写入 Pictures。清除应用数据或卸载会删除副本；副本不参与系统备份。恢复保存结果时，只核对本应用记录的保存地址，不扫描其他照片。\n\n保存后，Android 或相册应用可能按你已开启的设置自动云备份。演示图片单独存放在 GR III Transfer Demo 文件夹。")
             .setPositiveButton("知道了",null).show();
     }
     private void addTab(String label,Runnable action,boolean active) {
@@ -212,7 +212,7 @@ public final class MainActivity extends Activity {
         boolean complete=!entries.isEmpty()&&saved==entries.size();
         content.addView(text(complete?"已保存到相册":ready>0?"原片已就绪":"导入记录",24,true));
         content.addView(text(complete?saved+" 张原片 · 拍摄信息已保留":ready+" 张待保存 · "+saved+" 张已保存"+(failed>0?" · "+failed+" 张可重试":""),14,false));
-        if(ready>0)banner("还有 "+ready+" 张原片只在临时空间，请保存后再离开。");
+        if(ready>0)banner("还有 "+ready+" 张原片在应用内待保存。重启会重新校验并恢复；清除应用数据或卸载会删除副本。");
         if(complete)banner("在相册或文件应用的 Pictures 文件夹中查看。"+(entries.stream().anyMatch(e->e.demo)?"\n演示图片位于 GR III Transfer Demo。":"\n原片位于 GR III Transfer。"));
         if(failed>0)addButton(content,"重试未完成的照片（"+failed+"）",controller::retry,!controller.busy&&controller.connected);
         if(entries.isEmpty()){content.addView(text("先到「照片」选择照片，导入的原片会显示在这里。",16,false));primary(bottom,"去选择照片",()->{trayTab=false;render(true);},true);}
@@ -221,16 +221,17 @@ public final class MainActivity extends Activity {
         for(TransferTray.Entry entry:entries) {
             LinearLayout item=card();content.addView(item);item.addView(text(entry.photo.name,17,true));
             TextView state=text(stateLabel(entry.status)+(entry.demo?" · 演示图片":""),13,true);state.setTextColor(entry.status==TransferTray.Status.FAILED?Color.rgb(148,63,40):GREEN);item.addView(state);
-            if(entry.status==TransferTray.Status.FAILED||entry.status==TransferTray.Status.CANCELLED||entry.status==TransferTray.Status.READY)item.addView(text(entry.message,13,false));
+            if(entry.status==TransferTray.Status.FAILED||entry.status==TransferTray.Status.CANCELLED||entry.status==TransferTray.Status.READY||entry.status==TransferTray.Status.SAVE_UNCONFIRMED)item.addView(text(entry.message,13,false));
             if(entry.status==TransferTray.Status.TRANSFERRING||entry.status==TransferTray.Status.SAVING) {
                 ProgressBar progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(entry.status==TransferTray.Status.SAVING||entry.expected<=0);progress.setMax(1000);if(entry.expected>0)progress.setProgress((int)(entry.bytes*1000/entry.expected));progress.setContentDescription(entry.status==TransferTray.Status.SAVING?"正在保存并校验原片":"原片导入进度");item.addView(progress);
                 if(entry.status==TransferTray.Status.TRANSFERRING)item.addView(text(size(entry.bytes)+(entry.expected>=0?" / "+size(entry.expected):" · 总大小未知"),12,false));
             }
             LinearLayout actions=row();item.addView(actions);addButton(actions,"详情",()->entryDetails(entry),true);
+            if(entry.recovered)item.addView(text("来自之前的导入 · 不会重试旧相机连接",12,false));
             if(entry.retryable(controller.session)&&controller.connected)addButton(actions,"重试这张",()->controller.retry(entry.key),!controller.busy);
             if((entry.status==TransferTray.Status.FAILED||entry.status==TransferTray.Status.CANCELLED)&&entry.attempts>=3)item.addView(text("已达到 3 次尝试上限，请检查连接并重新选片。",12,false));
             if(entry.savedUri!=null)addButton(actions,"查看照片",()->openSaved(entry),!controller.busy);
-            if((entry.status==TransferTray.Status.FAILED||entry.status==TransferTray.Status.CANCELLED)&&!entry.session.equals(controller.session))item.addView(text("这是之前连接的照片。请重新连接相机，再次选择该文件。",13,false));
+            if((entry.status==TransferTray.Status.FAILED||entry.status==TransferTray.Status.CANCELLED)&&entry.pendingSaveUri==null&&!entry.session.equals(controller.session))item.addView(text("这是之前连接的照片。请重新连接相机，再次选择该文件。",13,false));
         }
     }
     private void confirmSave(int count) {
@@ -240,7 +241,7 @@ public final class MainActivity extends Activity {
     }
     private void clearTray() {
         if(controller.busy)return;
-        if(controller.hasUnsaved())new AlertDialog.Builder(this).setTitle("清除未保存的原片？").setMessage("将删除导入记录中的临时副本。已保存到相册的照片和相机中的文件不会改变。")
+        if(controller.hasUnsaved())new AlertDialog.Builder(this).setTitle("清除未保存的原片？").setMessage("将删除导入记录中的应用内副本，包括无法恢复而隔离的原片。已保存到相册的照片和相机中的文件不会改变。")
             .setNegativeButton("保留原片",null).setPositiveButton("清除临时副本",(d,w)->controller.clear()).show();
         else controller.clear();
     }
@@ -264,7 +265,7 @@ public final class MainActivity extends Activity {
         try{startActivity(intent);}catch(ActivityNotFoundException e){Toast.makeText(this,"请使用相册或文件应用，在 Pictures/"+(entry.demo?"GR III Transfer Demo":"GR III Transfer")+" 查看照片",Toast.LENGTH_LONG).show();}
     }
     private static String stateLabel(TransferTray.Status state) {
-        switch(state){case QUEUED:return "等待导入";case TRANSFERRING:return "正在导入";case READY:return "待保存";case SAVING:return "正在保存";case SAVED:return "已保存";case FAILED:return "导入未完成";case CANCELLED:return "已取消";default:return "等待处理";}
+        switch(state){case QUEUED:return "等待导入";case TRANSFERRING:return "正在导入";case READY:return "待保存";case SAVING:return "正在保存";case SAVED:return "已保存";case SAVE_UNCONFIRMED:return "保存结果待确认";case FAILED:return "导入未完成";case CANCELLED:return "已取消";default:return "等待处理";}
     }
     private void banner(String value){TextView view=text(value,13,false);view.setPadding(dp(12),dp(12),dp(12),dp(12));view.setBackground(background(Color.rgb(231,239,232),12));LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,-2);params.topMargin=dp(8);params.bottomMargin=dp(8);content.addView(view,params);}
     private TextView text(String value,int size,boolean bold){TextView view=new TextView(this);view.setText(value);view.setTextSize(size);view.setTextColor(bold?INK:MUTED);view.setPadding(0,dp(4),0,dp(4));view.setLineSpacing(dp(2),1);if(bold)view.setTypeface(null,Typeface.BOLD);return view;}

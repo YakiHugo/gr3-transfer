@@ -2,6 +2,7 @@ package io.gr3.transfer.core;
 import java.io.*;
 /** Testable save transaction. The Store adapter owns only rows created by this app. */
 public final class PendingSave {
+    public interface Destination { void remember(String id) throws IOException; }
     public interface Source { InputStream open() throws IOException; }
     public interface Store {
         String createPending(String name, boolean demo) throws IOException;
@@ -13,9 +14,13 @@ public final class PendingSave {
         void discardPending(String id) throws IOException;
     }
     public static String save(Store store, Source source, String name, boolean demo, OriginalCopy.Receipt receipt, CancelToken token) throws IOException {
+        return save(store, source, name, demo, receipt, token, id -> {});
+    }
+    public static String save(Store store, Source source, String name, boolean demo, OriginalCopy.Receipt receipt, CancelToken token, Destination destination) throws IOException {
         token.check(); String id = store.createPending(name, demo); boolean published = false;
         try {
             store.remember(id);
+            destination.remember(id);
             try (InputStream in = source.open(); OutputStream out = store.openOutput(id)) {
                 if (out == null) throw new IOException("Android 无法打开待保存的照片。");
                 OriginalCopy.Receipt copied = OriginalCopy.copy(in, out, receipt.bytes, CameraRules.MAX_JPEG_BYTES, token, (b, total) -> {});

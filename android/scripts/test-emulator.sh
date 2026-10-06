@@ -26,4 +26,6 @@ run_phase layout
 run_phase prepare-death
 adb -s "$serial" shell am force-stop io.gr3.transfer
 run_phase verify-death
+adb -s "$serial" shell am force-stop io.gr3.transfer
+run_phase verify-death-cleared
 printf 'Native smoke and process-restart tests passed on %s\n' "$serial"

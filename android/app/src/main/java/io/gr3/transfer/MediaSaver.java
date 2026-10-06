@@ -21,18 +21,37 @@ final class MediaSaver {
     void cleanInterrupted() {
         for (String value : new HashSet<>(journal.getStringSet("uris", Collections.emptySet()))) {
             Uri uri = Uri.parse(value);
-            if (!"content".equals(uri.getScheme()) || !"media".equals(uri.getAuthority())) continue;
+            if (!StagedOriginals.validSavedUri(value)) continue;
             try {
                 boolean pending = false;
                 try (Cursor cursor = resolver.query(uri, new String[]{MediaStore.Images.Media.IS_PENDING}, null, null, null)) {
-                    if (cursor != null && cursor.moveToFirst()) pending = cursor.getInt(0) == 1;
+                    if (cursor == null) continue;
+                    if (cursor.moveToFirst()) pending = cursor.getInt(0) == 1;
                 }
-                if (pending) resolver.delete(uri, MediaStore.Images.Media.IS_PENDING + " = ?", new String[]{"1"});
+                if (pending && resolver.delete(uri, MediaStore.Images.Media.IS_PENDING + " = ?", new String[]{"1"}) != 1) continue;
                 remember(uri, false);
             } catch (Exception ignored) { /* Leave journal for next startup; MediaStore also expires pending rows. */ }
         }
     }
-    Uri save(File original, String name, OriginalCopy.Receipt receipt, boolean demo, CancelToken token) throws IOException {
+    enum SavedState { MISSING, PUBLISHED, UNKNOWN }
+    // Query only our journaled exact item, never names or the entire photo library.
+    SavedState savedState(String value, OriginalCopy.Receipt receipt) {
+        if (!StagedOriginals.validSavedUri(value)) return SavedState.UNKNOWN;
+        Uri uri = Uri.parse(value);
+        try {
+            try (Cursor cursor = resolver.query(uri, new String[]{MediaStore.Images.Media.IS_PENDING}, null, null, null)) {
+                if (cursor == null) return SavedState.UNKNOWN;
+                if (!cursor.moveToFirst()) return SavedState.MISSING;
+                if (cursor.isNull(0) || cursor.getInt(0) != 0) return SavedState.UNKNOWN;
+            }
+            try (InputStream in = resolver.openInputStream(uri)) {
+                if (in == null) return SavedState.UNKNOWN;
+                OriginalCopy.Receipt actual = OriginalCopy.inspect(in, receipt.bytes, new CancelToken());
+                return actual.sha256.equals(receipt.sha256) ? SavedState.PUBLISHED : SavedState.UNKNOWN;
+            }
+        } catch (Exception ignored) { return SavedState.UNKNOWN; }
+    }
+    Uri save(File original, String name, OriginalCopy.Receipt receipt, boolean demo, CancelToken token, PendingSave.Destination destination) throws IOException {
         PendingSave.Store store = new PendingSave.Store() {
             public String createPending(String displayName, boolean synthetic) throws IOException {
                 ContentValues values = new ContentValues();
@@ -56,6 +75,6 @@ final class MediaSaver {
                 try { resolver.delete(Uri.parse(id), MediaStore.Images.Media.IS_PENDING + " = ?", new String[]{"1"}); } catch (RuntimeException e) { throw new IOException("将在下次启动时重新清理未完成的照片。"); }
             }
         };
-        return Uri.parse(PendingSave.save(store, () -> new FileInputStream(original), name, demo, receipt, token));
+        return Uri.parse(PendingSave.save(store, () -> StagedOriginals.openOriginal(original), name, demo, receipt, token, destination));
     }
 }

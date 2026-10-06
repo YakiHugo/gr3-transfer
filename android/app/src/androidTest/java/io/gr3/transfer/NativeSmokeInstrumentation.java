@@ -29,10 +29,10 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
             getUiAutomation().setServiceInfo(service);
             activity = (MainActivity) startActivitySync(new Intent(getTargetContext(), MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             controller = ((TransferApplication) activity.getApplication()).controller;
-            waitForIdleSync();
+            waitForIdleSync(); awaitIdle();
             if(!phase.equals("smoke")) {
-                runOnMainSync(()->controller.connect(true));awaitIdle();
-                if(phase.equals("tools"))verifyGalleryTools();else if(phase.equals("layout"))verifyLayout();else if(phase.equals("prepare-death"))prepareProcessDeath();else if(phase.equals("verify-death"))verifyProcessDeath();else throw new AssertionError("Unknown phase");
+                if(phase.equals("tools")||phase.equals("layout")||phase.equals("prepare-death")){runOnMainSync(()->controller.connect(true));awaitIdle();}
+                if(phase.equals("tools"))verifyGalleryTools();else if(phase.equals("layout"))verifyLayout();else if(phase.equals("prepare-death"))prepareProcessDeath();else if(phase.equals("verify-death"))verifyProcessDeath();else if(phase.equals("verify-death-cleared"))verifyProcessDeathCleared();else throw new AssertionError("Unknown phase");
                 result.putString("stream","PASS "+assertions+" Android process-lifecycle assertions: "+phase+"\n");finish(Activity.RESULT_OK,result);return;
             }
             screenshot("01-onboarding");
@@ -71,7 +71,7 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
             runOnMainSync(()->check(find(activity.getWindow().getDecorView(),"导入记录（12）").isSelected(),"Transfers tab has selected accessibility state"));
             runOnMainSync(()->{
                 String text=collectText(activity.getWindow().getDecorView());
-                check(text.contains("原片已就绪")&&text.contains("临时空间"),"ready originals have explicit unsaved warning");
+                check(text.contains("原片已就绪")&&text.contains("重启会重新校验并恢复"),"ready originals have explicit unsaved warning");
                 check(!text.contains("SHA-256")&&!text.contains("source "),"ready list hides hashes and source diagnostics");
             });
             click("详情");
@@ -215,28 +215,100 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
         for(String uri:createdMedia)try{getTargetContext().getContentResolver().delete(android.net.Uri.parse(uri),null,null);}catch(Exception ignored){}
         createdMedia.clear();
     }
-    private void prepareProcessDeath()throws Exception {
-        File source=new File(getTargetContext().getCacheDir(),"process-original.jpg");
-        try(InputStream in=getTargetContext().getAssets().open("41232663d06e8f19609d78e8.jpg");OutputStream out=new FileOutputStream(source)){byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);}
-        OriginalCopy.Receipt receipt;try(InputStream in=new FileInputStream(source)){receipt=OriginalCopy.inspect(in,source.length(),new CancelToken());}
-        android.net.Uri saved=new MediaSaver(getTargetContext()).save(source,"DEMO_process_death_saved.JPG",receipt,true,new CancelToken());
-        android.content.ContentValues values=new android.content.ContentValues();values.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME,"DEMO_process_death_pending.JPG");values.put(android.provider.MediaStore.Images.Media.MIME_TYPE,"image/jpeg");values.put(android.provider.MediaStore.Images.Media.RELATIVE_PATH,"Pictures/GR III Transfer Demo");values.put(android.provider.MediaStore.Images.Media.IS_PENDING,1);
-        android.net.Uri pending=getTargetContext().getContentResolver().insert(android.provider.MediaStore.Images.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY),values);check(pending!=null,"prepare app-owned pending row");
-        Set<String> journal=new HashSet<>();journal.add(pending.toString());journal.add(saved.toString());
-        check(getTargetContext().getSharedPreferences("pending-saves",0).edit().putStringSet("uris",journal).commit(),"simulate journal at process death including already-published URI");
-        File orphan=new File(getTargetContext().getCacheDir(),"originals/orphan-process-test.jpg");try(OutputStream out=new FileOutputStream(orphan)){out.write(new byte[]{1,2,3});}
-        org.json.JSONObject metadata=new org.json.JSONObject();metadata.put("saved",saved.toString());metadata.put("pending",pending.toString());metadata.put("sha256",receipt.sha256);metadata.put("bytes",receipt.bytes);
-        try(OutputStream out=new FileOutputStream(new File(getTargetContext().getFilesDir(),"process-test.json"))){out.write(metadata.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));}
-        source.delete();check(orphan.isFile(),"prepare orphan private cache");
+    private File processMetadata() { return new File(getTargetContext().getFilesDir(),"process-test.json"); }
+    private org.json.JSONObject readProcessMetadata() throws Exception {
+        try(InputStream in=new FileInputStream(processMetadata())) {
+            ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;
+            while((n=in.read(b))!=-1)out.write(b,0,n);
+            return new org.json.JSONObject(out.toString("UTF-8"));
+        }
     }
-    private void verifyProcessDeath()throws Exception {
-        String text;try(InputStream in=new FileInputStream(new File(getTargetContext().getFilesDir(),"process-test.json"))){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1)out.write(b,0,n);text=out.toString("UTF-8");}
-        org.json.JSONObject metadata=new org.json.JSONObject(text);android.net.Uri saved=android.net.Uri.parse(metadata.getString("saved")),pending=android.net.Uri.parse(metadata.getString("pending"));
-        try(android.database.Cursor cursor=getTargetContext().getContentResolver().query(pending,new String[]{android.provider.MediaStore.Images.Media._ID},null,null,null)){check(cursor==null||!cursor.moveToFirst(),"process restart removes only recorded pending row");}
-        try(InputStream in=getTargetContext().getContentResolver().openInputStream(saved)){OriginalCopy.Receipt receipt=OriginalCopy.inspect(in,metadata.getLong("bytes"),new CancelToken());check(receipt.sha256.equals(metadata.getString("sha256")),"process restart preserves already-published exact original");}
-        check(!new File(getTargetContext().getCacheDir(),"originals/orphan-process-test.jpg").exists(),"process restart removes orphan app cache");
+    private void writeProcessMetadata(org.json.JSONObject metadata) throws Exception {
+        try(OutputStream out=new FileOutputStream(processMetadata())) {out.write(metadata.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));}
+    }
+    private StagedOriginals originals() throws IOException {return new StagedOriginals(new File(getTargetContext().getNoBackupFilesDir(),"originals"));}
+    private void prepareProcessDeath() throws Exception {
+        runOnMainSync(controller::clear);
+        Set<String> selected=new LinkedHashSet<>();for(int i=0;i<6;i++)selected.add(controller.inventory.photos.get(i).key());
+        runOnMainSync(()->controller.transfer(selected));awaitIdle();
+        List<TransferTray.Entry> entries=controller.entries();check(entries.size()==6&&entries.stream().allMatch(e->e.status==TransferTray.Status.READY),"prepare six durably completed synthetic originals");
+        TransferTray.Entry published=entries.get(0),interrupted=entries.get(1),ready=entries.get(2),removed=entries.get(3),unconfirmed=entries.get(4),quarantined=entries.get(5);
+        StagedOriginals originals=originals();
+        // Model the actual crash boundary: provider has published, controller has not cleared its staged record.
+        android.net.Uri saved=new MediaSaver(getTargetContext()).save(published.file,"DEMO_process_death_saved.JPG",published.receipt,true,new CancelToken(),id->originals.rememberSave(published,id));
+        // A recorded row whose bytes no longer match must remain blocked, never inferred saved by name.
+        check(!unconfirmed.receipt.sha256.equals(published.receipt.sha256),"uncertain-save fixture has distinct original bytes");
+        originals.rememberSave(unconfirmed,saved.toString());
+        try(OutputStream out=new FileOutputStream(new File(originals.directory(),quarantined.stagingId+".record"))){out.write(new byte[]{1,2,3});}
+        android.content.ContentValues values=new android.content.ContentValues();values.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME,"DEMO_process_death_pending.JPG");values.put(android.provider.MediaStore.Images.Media.MIME_TYPE,"image/jpeg");values.put(android.provider.MediaStore.Images.Media.RELATIVE_PATH,"Pictures/GR III Transfer Demo");values.put(android.provider.MediaStore.Images.Media.IS_PENDING,1);
+        android.net.Uri pending=getTargetContext().getContentResolver().insert(android.provider.MediaStore.Images.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY),values);check(pending!=null,"prepare app-owned interrupted pending row");
+        originals.rememberSave(interrupted,pending.toString());
+        Set<String> journal=new HashSet<>();journal.add(pending.toString());journal.add(saved.toString());
+        check(getTargetContext().getSharedPreferences("pending-saves",0).edit().putStringSet("uris",journal).commit(),"simulate pending cleanup journal including already-published URI");
+        runOnMainSync(()->check(controller.remove(removed.key,true)==TransferTray.RemoveResult.REMOVED,"explicitly removed original committed before process death"));
+        File part=originals.createPart();try(OutputStream out=originals.openPart(part)){out.write(new byte[]{1,2,3});}
+        File legacyDir=new File(getTargetContext().getCacheDir(),"originals");legacyDir.mkdirs();
+        File orphan=new File(legacyDir,"orphan-process-test.jpg");try(OutputStream out=new FileOutputStream(orphan)){out.write(new byte[]{1,2,3});}
+        org.json.JSONObject metadata=new org.json.JSONObject();metadata.put("saved",saved.toString());metadata.put("pending",pending.toString());metadata.put("savedHash",published.receipt.sha256);metadata.put("savedBytes",published.receipt.bytes);
+        metadata.put("readyKey",ready.key);metadata.put("readyHash",ready.receipt.sha256);metadata.put("readyBytes",ready.receipt.bytes);metadata.put("removedKey",removed.key);metadata.put("part",part.getName());metadata.put("publishedKey",published.key);metadata.put("interruptedKey",interrupted.key);metadata.put("unconfirmedKey",unconfirmed.key);metadata.put("quarantinedFile",quarantined.file.getName());metadata.put("quarantinedHash",quarantined.receipt.sha256);metadata.put("quarantinedBytes",quarantined.receipt.bytes);
+        writeProcessMetadata(metadata);check(part.isFile()&&orphan.isFile(),"prepare unfinished private part and legacy cache orphan");
+    }
+    private void verifyProcessDeath() throws Exception {
+        org.json.JSONObject metadata=readProcessMetadata();android.net.Uri saved=android.net.Uri.parse(metadata.getString("saved")),pending=android.net.Uri.parse(metadata.getString("pending"));
+        check(!controller.connected&&controller.session.isEmpty()&&controller.inventory.photos.isEmpty(),"restart does not connect or read old camera session");
+        List<TransferTray.Entry> entries=controller.entries();check(entries.size()==4&&entries.stream().allMatch(e->e.recovered&&e.demo),"restart restores only completed synthetic entries with old-source mode");
+        check(entries.stream().noneMatch(e->e.key.equals(metadata.optString("removedKey"))),"explicitly removed original does not resurrect");
+        File quarantinedFile=new File(originals().directory(),metadata.getString("quarantinedFile"));
+        try(InputStream in=new FileInputStream(quarantinedFile)){check(OriginalCopy.inspect(in,metadata.getLong("quarantinedBytes"),new CancelToken()).sha256.equals(metadata.getString("quarantinedHash")),"corrupt metadata preserves completed original bytes without restoring unsafe record");}
+        check(controller.status.contains("隔离")&&controller.stagedBytes()>=quarantinedFile.length(),"quarantined original is disclosed and counted in physical storage");
+        TransferTray.Entry ready=entries.stream().filter(e->e.key.equals(metadata.optString("readyKey"))).findFirst().orElseThrow(()->new AssertionError("missing ready original"));
+        check(ready.status==TransferTray.Status.READY&&ready.receipt.sha256.equals(metadata.getString("readyHash"))&&ready.receipt.bytes==metadata.getLong("readyBytes"),"completed original restores saveable with unchanged actual hash and length");
+        try(InputStream in=new FileInputStream(ready.file)){check(OriginalCopy.inspect(in,ready.receipt.bytes,new CancelToken()).sha256.equals(ready.receipt.sha256),"recovered file still contains exact original bytes");}
+        check(!ready.retryable(ready.session),"old-source entry cannot retry even with its original session token");
+        TransferTray.Entry published=entries.stream().filter(e->e.key.equals(metadata.optString("publishedKey"))).findFirst().orElseThrow(()->new AssertionError("missing published record"));
+        check(published.status==TransferTray.Status.SAVED&&saved.toString().equals(published.savedUri)&&published.file==null,"crash after publish reconciles exact saved URI without another save");
+        try(android.database.Cursor cursor=getTargetContext().getContentResolver().query(pending,new String[]{android.provider.MediaStore.Images.Media._ID},null,null,null)){check(cursor!=null&&!cursor.moveToFirst(),"process restart removes only recorded unpublished row");}
+        TransferTray.Entry interrupted=entries.stream().filter(e->e.key.equals(metadata.optString("interruptedKey"))).findFirst().orElseThrow(()->new AssertionError("missing interrupted original"));
+        check(interrupted.status==TransferTray.Status.READY&&interrupted.pendingSaveUri==null,"cleaned interrupted save becomes explicitly saveable");
+        try(InputStream in=getTargetContext().getContentResolver().openInputStream(saved)){OriginalCopy.Receipt receipt=OriginalCopy.inspect(in,metadata.getLong("savedBytes"),new CancelToken());check(receipt.sha256.equals(metadata.getString("savedHash")),"process restart preserves published original bytes");}
+        check(!new File(getTargetContext().getCacheDir(),"originals/orphan-process-test.jpg").exists(),"process restart removes legacy cache orphan");
+        check(!new File(originals().directory(),metadata.getString("part")).exists(),"process restart removes unfinished part");
         check(getTargetContext().getSharedPreferences("pending-saves",0).getStringSet("uris",Collections.emptySet()).isEmpty(),"process restart clears handled pending journal");
-        getTargetContext().getContentResolver().delete(saved,null,null);new File(getTargetContext().getFilesDir(),"process-test.json").delete();
+        TransferTray.Entry unconfirmed=entries.stream().filter(e->e.key.equals(metadata.optString("unconfirmedKey"))).findFirst().orElseThrow(()->new AssertionError("missing uncertain original"));
+        check(unconfirmed.status==TransferTray.Status.SAVE_UNCONFIRMED&&unconfirmed.savedUri==null&&unconfirmed.pendingSaveUri!=null&&unconfirmed.file.isFile(),"mismatched published URI blocks another save and retains original");
+        check(!unconfirmed.retryable(unconfirmed.session),"uncertain save cannot retry camera source");
+        click("导入记录（4）");
+        runOnMainSync(()->check(collectText(activity.getWindow().getDecorView()).contains("来自之前的导入"),"restored cards disclose their old source"));
+        screenshot("08-recovered-originals");
+        // Remove the interrupted card so the UI consent saves exactly the recovered ready original.
+        runOnMainSync(()->check(controller.remove(interrupted.key,true)==TransferTray.RemoveResult.REMOVED,"recovered interrupted original can be explicitly removed"));
+        click("保存到相册（1）");clickDialog("确认保存");awaitIdle();
+        check(ready.status==TransferTray.Status.SAVED&&ready.savedUri!=null,"recovered original saves through confirmed real MediaStore transaction");
+        try(InputStream in=getTargetContext().getContentResolver().openInputStream(android.net.Uri.parse(ready.savedUri))){check(OriginalCopy.inspect(in,ready.receipt.bytes,new CancelToken()).sha256.equals(ready.receipt.sha256),"recovered save preserves original hash");}
+        String firstSave=ready.savedUri;runOnMainSync(controller::saveReady);awaitIdle();
+        check(firstSave.equals(ready.savedUri)&&published.savedUri.equals(saved.toString()),"repeated save does not create another published copy");
+        check(unconfirmed.status==TransferTray.Status.SAVE_UNCONFIRMED&&unconfirmed.savedUri==null,"batch save leaves uncertain result blocked");
+        List<TransferTray.Entry> durableEntries=originals().restore().entries;
+        check(durableEntries.stream().noneMatch(e->e.key.equals(ready.key)||e.key.equals(published.key)),"successful saves remove durable recovery records before any clear operation");
+        try(android.database.Cursor cursor=getTargetContext().getContentResolver().query(android.net.Uri.parse(ready.savedUri),new String[]{android.provider.MediaStore.Images.Media.RELATIVE_PATH},null,null,null)){check(cursor!=null&&cursor.moveToFirst()&&cursor.getString(0).contains("GR III Transfer Demo"),"restored demo original remains isolated in demo album");}
+        metadata.put("recoveredSaved",ready.savedUri);
+        // Fresh durable entry, then explicit clear, followed by another real force-stop/restart.
+        runOnMainSync(()->controller.connect(true));awaitIdle();String key=controller.inventory.photos.get(0).key();
+        runOnMainSync(()->controller.transfer(Collections.singleton(key)));awaitIdle();
+        check(controller.entries().stream().anyMatch(e->e.status==TransferTray.Status.READY),"prepare ready original for durable clear regression");
+        click("更多");clickDialog("清空导入记录");check(dialogContains("隔离"),"clear confirmation includes quarantined originals");clickDialog("清除临时副本");
+        check(controller.entries().isEmpty()&&!quarantinedFile.exists(),"confirmed clear commits staged and quarantined removals");writeProcessMetadata(metadata);
+    }
+    private void verifyProcessDeathCleared() throws Exception {
+        org.json.JSONObject metadata=readProcessMetadata();
+        check(controller.entries().isEmpty()&&!controller.connected,"saved removed and cleared entries do not resurrect after second restart");
+        check(originals().restore().entries.isEmpty(),"no committed private originals remain after save and clear");
+        for(String key:Arrays.asList("saved","recoveredSaved")) {
+            android.net.Uri uri=android.net.Uri.parse(metadata.getString(key));String hash=metadata.getString(key.equals("saved")?"savedHash":"readyHash");long bytes=metadata.getLong(key.equals("saved")?"savedBytes":"readyBytes");
+            try(InputStream in=getTargetContext().getContentResolver().openInputStream(uri)){check(OriginalCopy.inspect(in,bytes,new CancelToken()).sha256.equals(hash),"clear and restart preserve published exact bytes: "+key);}
+            getTargetContext().getContentResolver().delete(uri,null,null);
+        }
+        processMetadata().delete();
     }
     private void check(boolean value,String label){assertions++;if(!value)throw new AssertionError(label);Bundle progress=new Bundle();progress.putString("stream","Checked: "+label+"\n");sendStatus(0,progress);}
     private void awaitIdle()throws Exception {
