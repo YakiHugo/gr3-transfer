@@ -62,14 +62,14 @@ async function harness(t, { intercept, adapter, setup } = {}) {
 test('DOM: disconnected landing does not request camera or expose synthetic state as connected', async t => {
   const h = await harness(t);
   assert.equal(h.$('#landing').hidden, false); assert.equal(h.$('#workspace').hidden, true);
-  assert.match(h.$('#connection-badge').textContent, /Disconnected/);
+  assert.match(h.$('#connection-badge').textContent, /未连接/);
   assert.equal(h.cameraCalls(), 0); assert.deepEqual(h.requests, ['/api/session']);
 });
 
 test('DOM: demo gallery, folder/search filters, sorting, empty/reset and selection work', async t => {
   const h = await harness(t); await h.demo();
   assert.equal(h.all('.photo-card').length, 12, h.$('#notice-text').textContent); assert.equal(h.$('#demo-banner').hidden, false);
-  assert.match(h.$('#connection-badge').textContent, /Synthetic demo/);
+  assert.match(h.$('#connection-badge').textContent, /示例演示/);
   h.change('#folder', '100RICOH'); assert.equal(h.all('.photo-card').length, 6);
   h.change('#search', '0000001', 'input'); assert.equal(h.all('.photo-card').length, 1);
   h.click('#select-visible'); assert.equal(h.$('#selection-count').textContent, '1');
@@ -96,7 +96,7 @@ test('DOM: original transfer creates unchanged Blob and save only reports browse
   assert.equal(h.all('.queue-item').length, 1); assert.equal(h.blobs.size, 1);
   assert.deepEqual(Buffer.from(await [...h.blobs.values()][0].arrayBuffer()), original);
   h.click('.queue-item-top button'); assert.equal(h.saved.length, 1); assert.equal(h.saved[0].filename, '8-100RICOH__R0000001.JPG');
-  assert.match(h.$('.queue-item-status').textContent, /Sent to browser/);
+  assert.match(h.$('.queue-item-status').textContent, /已交给浏览器/);
   h.click('.queue-remove'); assert.equal(h.blobs.size, 1); assert.equal(h.revoked.length, 1); // separate download lease remains briefly valid
 });
 
@@ -105,7 +105,7 @@ test('DOM: sequential selected downloads, repeat-click deduplication and clear r
   h.click('#select-visible'); h.click('#transfer');
   await until(() => h.all('.queue-item[data-state="ready"]').length === 6);
   assert.equal(h.blobs.size, 6); h.click('#transfer'); assert.equal(h.all('.queue-item').length, 6);
-  assert.match(h.$('#notice-text').textContent, /already in the transfer tray/);
+  assert.match(h.$('#notice-text').textContent, /已在传输记录中/);
   h.click('#clear-queue'); assert.equal(h.blobs.size, 0); assert.equal(h.$('#queue-panel').hidden, true);
 });
 
@@ -116,7 +116,7 @@ test('DOM: failed download is retryable and does not produce a saveable Blob', a
   }});
   await h.demo(); h.click('.photo-select input'); h.click('#transfer');
   await until(() => h.$('.queue-item')?.dataset.state === 'failed');
-  assert.equal(h.blobs.size, 0); assert.match(h.$('.queue-item-status').textContent, /Synthetic interruption/);
+  assert.equal(h.blobs.size, 0); assert.match(h.$('.queue-item-status').textContent, /操作未完成/);
   h.click('.queue-item-top button'); await until(() => h.$('.queue-item')?.dataset.state === 'ready'); assert.equal(attempts, 2);
 });
 
@@ -130,7 +130,7 @@ test('DOM: interrupted reader cannot be saved; manual retries stop after three a
     if (i < 3) h.click('.queue-item-top button');
   }
   assert.equal(h.blobs.size, 0); assert.equal(h.$('.queue-item-top button'), null);
-  assert.match(h.$('.queue-item-status').textContent, /Retry limit reached/);
+  assert.match(h.$('.queue-item-status').textContent, /已达到重试上限/);
 });
 
 test('DOM: cancel aborts active stream and queued files without starting the next download', async t => {
@@ -151,7 +151,7 @@ test('DOM: declared size mismatch and oversized JPEG fail before Save', async t 
   for (const size of [original.length + 1, 129 * 1024 * 1024]) {
     const h = await harness(t, { intercept: async url => url.pathname.endsWith('/original') ? new Response(original, { headers: { 'Content-Type': 'image/jpeg', 'X-File-Size': size } }) : undefined });
     await h.demo(); h.click('.photo-select input'); h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'failed');
-    assert.equal(h.blobs.size, 0); assert.equal(h.$('.queue-item-top button')?.textContent, 'Retry');
+    assert.equal(h.blobs.size, 0); assert.equal(h.$('.queue-item-top button')?.textContent, '重试');
   }
 });
 
@@ -159,7 +159,7 @@ test('DOM: failed real-camera connection reconciles demo session and exposes hon
   const h = await harness(t); await h.demo(); h.click('#switch-camera'); h.click('#confirm-connect');
   await until(() => !h.$('#connect-error').hidden);
   assert.equal(h.cameraCalls(), 1); assert.equal(h.$('#landing').hidden, false); assert.equal(h.$('#workspace').hidden, true);
-  assert.match(h.$('#connect-error').textContent, /Synthetic offline/); assert.match(h.$('#connection-badge').textContent, /Disconnected/);
+  assert.match(h.$('#connect-error').textContent, /无法连接相机/); assert.match(h.$('#connection-badge').textContent, /未连接/);
   h.click('#connect-dialog .close-dialog'); h.click('#try-demo'); await until(() => !h.$('#workspace').hidden);
 });
 
@@ -170,7 +170,7 @@ test('DOM: large list paginates 24 frames, keeps cross-page selections and displ
   await h.demo(); assert.equal(h.all('.photo-card').length, 24); h.click('#select-visible');
   h.click('#pagination button:last-child'); assert.equal(h.all('.photo-card').length, 24); h.click('#select-visible'); assert.equal(h.$('#selection-count').textContent, '48');
   h.click('#pagination button:last-child'); assert.equal(h.all('.photo-card').length, 2); h.click('#select-visible'); h.click('#transfer');
-  assert.match(h.$('#notice-text').textContent, /holds 48/); assert.equal(h.blobs.size, 0);
+  assert.match(h.$('#notice-text').textContent, /保留 48/); assert.equal(h.blobs.size, 0);
   h.change('#search', '<img', 'input'); assert.equal(h.all('.photo-card').length, 1); assert.equal(h.$('.photo-meta img'), null);
   assert.equal(h.$('.photo-meta h3').textContent, '<img src=x onerror=alert(1)>.JPG');
 });
@@ -181,7 +181,7 @@ test('DOM: disconnect preserves completed originals; help states phone networkin
   assert.equal(h.blobs.size, 1); assert.equal(h.$('#workspace').hidden, true);
   assert.equal(h.$('#offline-transfers').hidden, false);
   h.click('.queue-item-top button'); assert.equal(h.saved.length, 1);
-  h.click('[data-help="phone"]'); assert.match(h.$('#help-content').textContent, /will not reach this computer/);
+  h.click('[data-help="phone"]'); assert.match(h.$('#help-content').textContent, /无法连接这台电脑/);
   h.click('#help-dialog .close-dialog'); assert.equal(h.window.document.body.classList.contains('has-modal'), false);
 });
 
@@ -197,7 +197,7 @@ test('DOM: unknown real-camera metadata remains explicitly unknown', async t => 
     if (url.pathname === '/api/photos') return Response.json({ mode: 'demo', photos: [{ id: '0'.repeat(24), name: 'R0000001.JPG', folder: '100RICOH', bytes: null, width: null, height: null, takenAt: null, thumbnailUrl: '/missing', originalUrl: '/missing', synthetic: false }] });
   }});
   await h.demo(); h.click('.photo-image-button');
-  assert.equal(h.$('#preview-size').textContent, 'Size unknown'); assert.equal(h.$('#preview-dimensions').textContent, 'Not supplied'); assert.equal(h.$('#preview-date').textContent, 'Not supplied');
+  assert.equal(h.$('#preview-size').textContent, '大小未知'); assert.equal(h.$('#preview-dimensions').textContent, '未提供'); assert.equal(h.$('#preview-date').textContent, '未提供');
   assert.equal(h.$('#preview-synthetic').hidden, true);
 });
 
@@ -208,7 +208,7 @@ test('DOM: Back/Forward restoration clears unusable Blob URLs and reconciles gal
   assert.equal(h.blobs.size, 0); assert.equal(h.all('.queue-item').length, 0);
   const event = new h.window.Event('pageshow'); Object.defineProperty(event, 'persisted', { value: true }); h.window.dispatchEvent(event);
   await until(() => h.all('.photo-card').length === 12 && !h.$('#disconnect').disabled);
-  assert.equal(h.all('.queue-item').length, 0); assert.match(h.$('#notice-text').textContent, /cleared|retransfer|transfer.*again/i);
+  assert.equal(h.all('.queue-item').length, 0); assert.match(h.$('#notice-text').textContent, /清空|重新传输/i);
   h.click('.photo-select input'); h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'ready'); assert.equal(h.blobs.size, 1);
 });
 
@@ -242,7 +242,7 @@ test('DOM: disconnect during batch cancels the active file and preserves already
   h.click('#disconnect'); await until(() => !h.$('#landing').hidden && !h.$('#disconnect').disabled);
   assert.equal(h.all('.queue-item[data-state="ready"]').length, 1); assert.equal(h.all('.queue-item[data-state="cancelled"]').length, 11);
   assert.equal(h.$('#offline-transfers').hidden, false); assert.equal(h.blobs.size, 1);
-  assert.equal(h.all('.queue-item button[aria-label^="Retry"]').length, 0);
+  assert.equal(h.all('.queue-item button[aria-label^="重试"]').length, 0);
   h.click('.queue-item[data-state="ready"] .queue-item-top button'); assert.equal(h.saved.length, 1);
 });
 
@@ -265,16 +265,16 @@ test('DOM: failed camera switch retains previously completed demo originals for 
 test('DOM: stale source errors are not offered as blindly repeatable retries', async t => {
   const h = await harness(t, { intercept: async url => url.pathname.endsWith('/original') ? Response.json({ error: 'Gallery session ended.', code: 'STALE_SESSION' }, { status: 409 }) : undefined });
   await h.demo(); h.click('.photo-select input'); h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'failed');
-  assert.equal(h.$('.queue-item-top button'), null); assert.match(h.$('.queue-item-status').textContent, /Reconnect and reselect/);
+  assert.equal(h.$('.queue-item-top button'), null); assert.match(h.$('.queue-item-status').textContent, /重新连接并选择/);
 });
 
 test('DOM: ZIP creation, explicit save handoff, offline save and clear release archive plus originals', async t => {
   const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'ready');
   h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
-  assert.equal(h.blobs.size, 2); assert.match(h.$('#archive-status').textContent, /SHA-256 manifest/);
+  assert.equal(h.blobs.size, 2); assert.match(h.$('#archive-status').textContent, /SHA-256 清单/);
   h.click('#disconnect'); await until(() => !h.$('#landing').hidden && !h.$('#disconnect').disabled);
   h.click('#save-archive'); assert.equal(h.saved.length, 1); assert.match(h.saved[0].filename, /^gr3-originals-.*\.zip$/);
-  assert.equal(h.saved[0].blob.type, 'application/zip'); assert.match(h.$('#archive-status').textContent, /saving to disk is not verified/);
+  assert.equal(h.saved[0].blob.type, 'application/zip'); assert.match(h.$('#archive-status').textContent, /无法确认是否已写入磁盘/);
   h.click('#clear-queue'); assert.equal(h.blobs.size, 1); assert.equal(h.$('#offline-transfers').hidden, true); // ZIP handoff lease survives clear
 });
 
@@ -292,7 +292,7 @@ test('DOM: cancelling ZIP preparation keeps ready originals and permits a later 
   const originalHelpers = h.window.GRTransferFiles;
   h.window.GRTransferFiles = { ...originalHelpers, buildArchive: (_entries, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')))) };
   h.click('#build-archive'); assert.equal(h.$('#cancel-archive').hidden, false); h.click('#cancel-archive'); await until(() => h.$('#cancel-archive').hidden);
-  assert.equal(h.blobs.size, 1); assert.match(h.$('#archive-status').textContent, /cancelled.*still available/);
+  assert.equal(h.blobs.size, 1); assert.match(h.$('#archive-status').textContent, /取消.*仍可单独保存/);
   h.window.GRTransferFiles = originalHelpers; h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden); assert.equal(h.blobs.size, 2);
 });
 
@@ -321,12 +321,12 @@ test('DOM: retrying a failed file invalidates a previously prepared partial ZIP'
   await h.demo(); h.change('#folder', '100RICOH'); h.click('#select-visible'); h.click('#transfer');
   await until(() => h.all('.queue-item[data-state="ready"]').length === 5 && h.all('.queue-item[data-state="failed"]').length === 1 && !h.$('#build-archive').disabled);
   h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
-  assert.match(h.$('#archive-status').textContent, /5 original JPEGs/);
+  assert.match(h.$('#archive-status').textContent, /5 张原片/);
   h.click('.queue-item[data-state="failed"] .queue-item-top button');
   await until(() => h.all('.queue-item[data-state="ready"]').length === 6);
   assert.equal(h.$('#save-archive').hidden, true, 'The old partial ZIP must not remain saveable after a new successful retry');
   h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
-  assert.match(h.$('#archive-status').textContent, /6 original JPEGs/);
+  assert.match(h.$('#archive-status').textContent, /6 张原片/);
 });
 
 
@@ -339,7 +339,7 @@ test('DOM: two complete sessions retain a 24-JPEG ZIP through disconnect and cle
   }
   h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
   h.click('#save-archive'); assert.equal(h.saved.length, 1);
-  assert.match(h.$('#archive-status').textContent, /24 JPEGs/);
+  assert.match(h.$('#archive-status').textContent, /24 张原片/);
   const payload = Buffer.from(await h.saved[0].blob.arrayBuffer());
   h.click('#clear-queue'); assert.equal(h.blobs.size, 1);
   assert.deepEqual(Buffer.from(await h.saved[0].blob.arrayBuffer()), payload);
@@ -392,7 +392,7 @@ test('DOM: archive allocation failure leaves originals intact and allows packagi
   await until(() => h.$('.queue-item')?.dataset.state === 'ready');
   const create = h.window.URL.createObjectURL;
   h.window.URL.createObjectURL = blob => { if (blob.type === 'application/zip') throw new Error('Synthetic archive URL failure'); return create(blob); };
-  h.click('#build-archive'); await until(() => /Synthetic archive URL failure/.test(h.$('#archive-status').textContent));
+  h.click('#build-archive'); await until(() => /打包失败/.test(h.$('#archive-status').textContent));
   assert.equal(h.blobs.size, 1); assert.equal(h.$('#save-archive').hidden, true); assert.equal(h.$('#build-archive').disabled, false);
   h.window.URL.createObjectURL = create; h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
   assert.equal(h.blobs.size, 2);
@@ -417,9 +417,9 @@ test('DOM: one-click batch retry restores cancelled remainder, keeps ready bytes
   const readyBlob = [...h.blobs.values()][0];
   h.click('#cancel-queue'); await until(() => !h.$('#retry-unfinished').disabled);
   assert.equal(h.all('.queue-item[data-state="cancelled"]').length, 11);
-  assert.match(h.$('#queue-summary').textContent, /1 ready to save.*11 cancelled/);
-  assert.equal(h.$('#retry-unfinished').textContent, 'Retry unfinished (11)');
-  assert.match(h.$('#recovery-note').textContent, /failed and cancelled.*from the beginning.*Ready JPEGs are kept/);
+  assert.match(h.$('#queue-summary').textContent, /1 张待保存.*11 张已取消/);
+  assert.equal(h.$('#retry-unfinished').textContent, '重试未完成项（11）');
+  assert.match(h.$('#recovery-note').textContent, /从头重试.*失败或取消.*已完成原片会保留/);
   const button = h.$('#retry-unfinished'); button.click();
   // Dispatch bypasses native disabled-button click suppression to test the running guard too.
   button.dispatchEvent(new h.window.Event('click'));
@@ -428,7 +428,7 @@ test('DOM: one-click batch retry restores cancelled remainder, keeps ready bytes
   assert.equal(reads.get(interruptedUrl), 2);
   assert.ok([...h.blobs.values()].includes(readyBlob), 'Completed JPEG Blob is retained, not downloaded again');
   assert.equal(h.$('#queue-recovery').hidden, true); assert.equal(h.$('#retry-unfinished').disabled, true);
-  assert.equal(h.$('#queue-summary').textContent, '12 ready to save');
+  assert.equal(h.$('#queue-summary').textContent, '12 张待保存');
   for (const save of h.all('.queue-item-top button')) save.click();
   assert.equal(h.saved.length, 12);
   for (const saved of h.saved) {
@@ -450,20 +450,20 @@ test('DOM: batch retry excludes old sessions, stale responses and exhausted entr
   }});
   await h.demo(); h.change('#sort', 'name-asc'); h.click('.photo-select input'); h.click('#transfer');
   await until(() => !h.$('#retry-unfinished').disabled);
-  const oldRetry = h.$('#queue-1 button[aria-label^="Retry"]');
+  const oldRetry = h.$('#queue-1 button[aria-label^="重试"]');
   h.click('#disconnect'); await until(() => !h.$('#landing').hidden && !h.$('#disconnect').disabled);
   assert.equal(h.$('#retry-unfinished').hidden, true); assert.equal(h.$('#retry-unfinished').disabled, true);
   phase = 'current'; await h.demo(); h.change('#folder', '100RICOH'); h.click('#select-visible'); h.click('#transfer');
   await until(() => h.all('.queue-item[data-state="ready"]').length === 3 && !h.$('#build-archive').disabled);
-  const exhaustedRetry = h.$('#queue-2 button[aria-label^="Retry"]');
+  const exhaustedRetry = h.$('#queue-2 button[aria-label^="重试"]');
   for (let attempt = 2; attempt <= 3; attempt++) {
-    h.click('#queue-2 button[aria-label^="Retry"]');
+    h.click('#queue-2 button[aria-label^="重试"]');
     await until(() => h.$('#queue-2').dataset.state === 'failed' && !h.$('#build-archive').disabled);
   }
-  assert.equal(h.$('#retry-unfinished').textContent, 'Retry unfinished (1)');
-  assert.match(h.$('#recovery-note').textContent, /1 from a disconnected or changed source/);
-  assert.match(h.$('#recovery-note').textContent, /1 no longer available through this connection/);
-  assert.match(h.$('#recovery-note').textContent, /1 reached the 3-attempt limit/);
+  assert.equal(h.$('#retry-unfinished').textContent, '重试未完成项（1）');
+  assert.match(h.$('#recovery-note').textContent, /1 项的来源已断开或变更/);
+  assert.match(h.$('#recovery-note').textContent, /1 项在本次连接中已失效/);
+  assert.match(h.$('#recovery-note').textContent, /1 项已达到 3 次尝试上限/);
   const before = new Map(reads);
   oldRetry.click(); exhaustedRetry.click();
   assert.deepEqual(reads, before, 'Detached individual retry controls cannot revive stale or exhausted entries');
@@ -482,16 +482,16 @@ test('DOM: batch retry invalidates partial ZIP and preserves already handed-off 
   await h.demo(); h.change('#folder', '100RICOH'); h.click('#select-visible'); h.click('#transfer');
   await until(() => h.all('.queue-item[data-state="ready"]').length === 4 && !h.$('#build-archive').disabled);
   h.click('.queue-item[data-state="ready"] .queue-item-top button'); const saved = h.saved[0].blob;
-  assert.match(h.$('#queue-summary').textContent, /3 ready to save.*1 handed to browser.*2 failed/);
+  assert.match(h.$('#queue-summary').textContent, /3 张待保存.*1 张已交给浏览器.*2 张失败/);
   h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
   const oldZip = [...h.blobs.entries()].find(([, blob]) => blob.type === 'application/zip')[0];
-  assert.match(h.$('#archive-status').textContent, /4 original JPEGs/);
+  assert.match(h.$('#archive-status').textContent, /4 张原片/);
   h.click('#retry-unfinished'); assert.equal(h.$('#save-archive').hidden, true); assert.ok(h.revoked.includes(oldZip));
   await until(() => h.all('.queue-item[data-state="ready"]').length === 5 && !h.$('#build-archive').disabled);
   assert.equal(reads, 8); assert.equal(h.all('.queue-item[data-state="handed-off"]').length, 1);
   assert.ok([...h.blobs.values()].includes(saved));
   h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
-  assert.match(h.$('#archive-status').textContent, /6 original JPEGs/);
+  assert.match(h.$('#archive-status').textContent, /6 张原片/);
 });
 
 test('DOM: retry recovery is disabled during ZIP preparation and clearing removes recovery controls', async t => {
@@ -526,10 +526,10 @@ test('DOM: repeated cancellation respects the three-attempt cap and leaves unatt
     h.click('#cancel-queue'); await until(() => h.all('.queue-item[data-state="cancelled"]').length === 12 && !h.$('#retry-unfinished').disabled);
     if (attempt < 3) h.click('#retry-unfinished');
   }
-  assert.equal(h.$('#retry-unfinished').textContent, 'Retry unfinished (11)');
-  assert.equal(h.$('#queue-1 button[aria-label^="Retry"]'), null);
-  assert.match(h.$('#queue-1 .queue-item-status').textContent, /Retry limit reached/);
-  assert.match(h.$('#recovery-note').textContent, /1 reached the 3-attempt limit/);
+  assert.equal(h.$('#retry-unfinished').textContent, '重试未完成项（11）');
+  assert.equal(h.$('#queue-1 button[aria-label^="重试"]'), null);
+  assert.match(h.$('#queue-1 .queue-item-status').textContent, /已达到重试上限/);
+  assert.match(h.$('#recovery-note').textContent, /1 项已达到 3 次尝试上限/);
   assert.equal(reads, 3); assert.equal(h.blobs.size, 0);
 });
 
@@ -551,10 +551,10 @@ test('DOM: synthetic camera-protocol interruption recovers only missing original
   const h = await harness(t, { adapter });
   h.click('#landing-connect'); h.click('#confirm-connect');
   await until(() => !h.$('#workspace').hidden && !h.$('#disconnect').disabled);
-  assert.match(h.$('#connection-badge').textContent, /Camera.*unverified/);
+  assert.match(h.$('#connection-badge').textContent, /已连接.*待实机验证/);
   h.click('#select-visible'); h.click('#transfer');
   await until(() => h.all('.queue-item[data-state="ready"]').length === 2 && !h.$('#retry-unfinished').disabled);
-  assert.match(h.$('#recovery-note').textContent, /Restore camera Wi-Fi first/);
+  assert.match(h.$('#recovery-note').textContent, /先恢复相机 Wi-Fi/);
   h.click('#retry-unfinished'); await until(() => h.all('.queue-item[data-state="ready"]').length === 3 && !h.$('#build-archive').disabled);
   assert.equal(reads.get(photos[0].id), 1); assert.equal(reads.get(photos[1].id), 2); assert.equal(reads.get(photos[2].id), 1);
   assert.ok(calls.every(call => call.method === 'GET'));
@@ -625,7 +625,7 @@ test('DOM: delayed aborted transfer cleanup must not overwrite retry after faile
   releaseOldCancel(); await new Promise(resolve=>setTimeout(resolve,10));
   h.click('#build-archive'); await until(()=>!h.$('#save-archive').hidden);
   assert.equal(h.$('.queue-item').dataset.state, 'ready');
-  assert.ok(h.$('.queue-item-top button[aria-label^="Save"]'));
+  assert.ok(h.$('.queue-item-top button[aria-label^="保存"]'));
 });
 
 test('DOM: cached gallery refresh replaces metadata, prunes removed selections and clamps the page', async t => {
@@ -658,7 +658,7 @@ test('DOM: structured connection failures show relevant recovery steps and retry
   const h = await harness(t, { adapter: { connect: async () => { throw new AppError('Different model', 'WRONG_MODEL', 409); } } });
   h.click('#landing-connect'); h.click('#confirm-connect');
   await until(() => !h.$('#connect-error').hidden);
-  assert.match(h.$('#connect-recovery').textContent, /Only a device identifying as RICOH GR III/);
+  assert.match(h.$('#connect-recovery').textContent, /仅支持设备型号为 RICOH GR III/);
   assert.equal(h.$('#connect-recovery').hidden, false);
   h.click('#confirm-connect');
   assert.equal(h.$('#connect-recovery').hidden, true);
@@ -685,7 +685,7 @@ test('DOM: closing a pending connection cancels upstream and never resurrects th
   assert.equal(h.$('.queue-item').dataset.state, 'ready');
   finish(); await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(h.$('#workspace').hidden, true);
-  assert.match(h.$('#notice-text').textContent, /Connection cancelled/);
+  assert.match(h.$('#notice-text').textContent, /已取消连接/);
   await h.demo(); assert.equal(h.$('#workspace').hidden, false);
 });
 
@@ -705,11 +705,11 @@ test('DOM: selection review retains hidden selections and deselects only the vis
   const h = await harness(t); await h.demo();
   h.click('#select-visible'); assert.equal(h.$('#selection-count').textContent, '12');
   h.change('#folder', '100RICOH');
-  assert.match(h.$('#selection-visibility').textContent, /6 selected on this page · 6 elsewhere/);
+  assert.match(h.$('#selection-visibility').textContent, /本页已选 6 张 · 其他页 6 张/);
   h.click('#selected-only'); assert.equal(h.all('.photo-card').length, 6);
   h.click('#deselect-visible'); assert.equal(h.$('#selection-count').textContent, '6');
   assert.equal(h.all('.photo-card').length, 0);
-  assert.match(h.$('#empty-description').textContent, /No selected frames match/);
+  assert.match(h.$('#empty-description').textContent, /已选照片中没有符合/);
   h.click('#reset-filters'); assert.equal(h.all('.photo-card').length, 12);
   assert.equal(h.$('#selected-only').checked, false);
   h.click('#selected-only'); assert.equal(h.all('.photo-card').length, 6);
@@ -732,7 +732,7 @@ test('DOM: preview previous/next and arrow keys follow filtered order without ch
   assert.equal(h.requests.some(path => path.endsWith('/original')), false);
   h.click('.preview-close'); h.click('#selected-only'); h.click('.photo-image-button');
   h.click('#preview-select');
-  assert.equal(h.$('#preview-position').textContent, 'Outside current filters');
+  assert.equal(h.$('#preview-position').textContent, '不在当前筛选范围');
   assert.equal(h.$('#preview-previous').disabled, true); assert.equal(h.$('#preview-next').disabled, true);
   h.click('.preview-close'); assert.equal(h.$('#preview-image').hasAttribute('src'), false);
 });
@@ -743,7 +743,7 @@ test('DOM: transfer preflight blocks known over-budget batches before requesting
     await h.demo(); h.click('#select-visible');
     assert.equal(h.$('#transfer-plan').classList.contains('blocked'), true);
     h.click('#transfer');
-    assert.match(h.$('#notice-text').textContent, /exceeds/);
+    assert.match(h.$('#notice-text').textContent, /超过/);
     assert.equal(h.requests.some(path => path.endsWith('/original')), false);
     assert.equal(h.all('.queue-item').length, 0);
   }
@@ -751,13 +751,13 @@ test('DOM: transfer preflight blocks known over-budget batches before requesting
 
 test('DOM: transfer preflight exposes unknown sizes without guessing and excludes duplicates', async t => {
   const h = await harness(t); await h.demo(); h.click('.photo-select input');
-  assert.match(h.$('#transfer-plan').textContent, /1 new originals/);
+  assert.match(h.$('#transfer-plan').textContent, /新传输 1 张/);
   h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'ready');
-  assert.match(h.$('#transfer-plan').textContent, /1 already in tray; skipped/);
-  assert.doesNotMatch(h.$('#transfer-plan').textContent, /1 new originals/);
+  assert.match(h.$('#transfer-plan').textContent, /跳过 1 张已在列表中的照片/);
+  assert.doesNotMatch(h.$('#transfer-plan').textContent, /新传输 1 张/);
   const other = await harness(t, { intercept: async url => url.pathname === '/api/photos' ? Response.json({ photos: [{ id: 'unknown', name: 'R1.JPG', folder: '100RICOH', bytes: null, thumbnailUrl: '/missing', originalUrl: '/missing/original' }] }) : undefined });
   await other.demo(); other.click('#select-visible');
-  assert.match(other.$('#transfer-plan').textContent, /1 unknown sizes/);
+  assert.match(other.$('#transfer-plan').textContent, /1 张大小未知/);
   assert.equal(other.$('#transfer-plan').classList.contains('blocked'), false);
 });
 
@@ -765,11 +765,11 @@ test('DOM: transfer pace reports measured averages and only estimates known rema
   const h = await harness(t);
   const timingSource = app.slice(app.indexOf('function bytes('), app.indexOf('function dateValue(')) + app.slice(app.indexOf('function durationLabel('), app.indexOf('function itemStatus('));
   const sample = h.window.eval(`${timingSource}\ntransferTiming({ startedAt: 0, finishedAt: 2000, received: 1024, expected: 2048 })`);
-  assert.match(sample, /2s elapsed/); assert.match(sample, /512 B\/s average/); assert.match(sample, /about 2s remaining/);
+  assert.match(sample, /已用 2 秒/); assert.match(sample, /平均 512 B\/秒/); assert.match(sample, /约剩 2 秒/);
   const unknown = h.window.eval(`${timingSource}\ntransferTiming({ startedAt: 0, finishedAt: 2000, received: 1024, expected: null })`);
-  assert.doesNotMatch(unknown, /remaining/); assert.match(unknown, /average/);
+  assert.doesNotMatch(unknown, /约剩/); assert.match(unknown, /平均/);
   const starting = h.window.eval(`${timingSource}\ntransferTiming({ startedAt: 100, finishedAt: 100, received: 0, expected: 2048 })`);
-  assert.equal(starting, '0s elapsed'); assert.doesNotMatch(starting, /NaN|Infinity/);
+  assert.equal(starting, '已用 0 秒'); assert.doesNotMatch(starting, /NaN|Infinity/);
 });
 
 test('DOM: elapsed progress keeps updating while a read is stalled and cancellation removes it', async t => {
@@ -786,10 +786,10 @@ test('DOM: elapsed progress keeps updating while a read is stalled and cancellat
   assert.equal(timers.size, 1);
   clock = 2000;
   await until(() => { [...timers.values()].forEach(tick => tick()); return /20 B/.test(h.$('.queue-item-status').textContent); });
-  assert.match(h.$('.queue-item-status').textContent, /2s elapsed/);
-  assert.match(h.$('.queue-item-status').textContent, /average/);
+  assert.match(h.$('.queue-item-status').textContent, /已用 2 秒/);
+  assert.match(h.$('.queue-item-status').textContent, /平均/);
   h.click('#cancel-queue'); await until(() => h.$('.queue-item')?.dataset.state === 'cancelled');
-  assert.doesNotMatch(h.$('.queue-item-status').textContent, /elapsed/);
+  assert.doesNotMatch(h.$('.queue-item-status').textContent, /已用/);
   assert.equal(timers.size, 0);
 });
 
@@ -801,7 +801,7 @@ test('DOM: declining discard keeps ready originals and archive; acceptance relea
   h.click('#clear-queue'); h.click('.queue-remove');
   assert.equal(h.blobs.size, 2); assert.equal(h.all('.queue-item').length, 1);
   assert.equal(h.$('#save-archive').hidden, false); assert.equal(prompts.length, 2);
-  assert.match(prompts[0], /not yet sent to your browser/);
+  assert.match(prompts[0], /尚未保存/);
   h.window.confirm = () => true; h.click('.queue-remove'); assert.equal(h.blobs.size, 0);
 });
 
@@ -821,7 +821,7 @@ test('DOM: unsent originals request unload warning; successful individual or ZIP
 test('DOM: standalone verification is two-step, does not request camera or mark the JPEG saved', async t => {
   const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer');
   await until(() => h.$('.queue-item')?.dataset.state === 'ready'); const reads = h.requests.length;
-  h.click('.verify-original'); await until(() => /Save verification receipt/.test(h.$('.verify-original').textContent));
+  h.click('.verify-original'); await until(() => /保存校验记录/.test(h.$('.verify-original').textContent));
   assert.equal(h.saved.length, 0); assert.equal(h.requests.length, reads);
   h.click('.verify-original'); assert.equal(h.saved.length, 1); assert.match(h.saved[0].filename, /receipt\.json$/);
   const receipt = JSON.parse(await h.saved[0].blob.text()); assert.match(receipt.sha256, /^[0-9a-f]{64}$/);
@@ -835,10 +835,10 @@ test('DOM: cancelling or failing verification preserves the original and permits
   const helpers = h.window.GRTransferFiles;
   h.window.GRTransferFiles = { ...helpers, buildReceipt: (_entry, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))) };
   h.click('.verify-original'); assert.equal(h.$('#build-archive').disabled, true); h.click('.verify-original');
-  await until(() => /Verification cancelled/.test(h.$('.file-verification').textContent));
+  await until(() => /已取消校验/.test(h.$('.file-verification').textContent));
   assert.equal(h.$('.queue-item').dataset.state, 'ready'); assert.equal(h.blobs.size, 1);
   h.window.GRTransferFiles = helpers; h.click('.verify-original');
-  await until(() => /Save verification receipt/.test(h.$('.verify-original').textContent));
+  await until(() => /保存校验记录/.test(h.$('.verify-original').textContent));
 });
 
 test('DOM: thumbnail failures retry only their derivative, preserve selection and stop after three attempts', async t => {
@@ -851,7 +851,7 @@ test('DOM: thumbnail failures retry only their derivative, preserve selection an
   assert.equal(h.$('.thumbnail-recovery button').disabled, true);
   image.dispatchEvent(new h.window.Event('error')); h.click('.thumbnail-recovery button'); image.dispatchEvent(new h.window.Event('error'));
   assert.equal(h.$('.thumbnail-recovery button').disabled, true);
-  assert.match(h.$('.thumbnail-recovery').textContent, /Try Refresh/);
+  assert.match(h.$('.thumbnail-recovery').textContent, /检查 Wi-Fi 后刷新/);
   assert.equal(h.$('#selection-count').textContent, '1');
   assert.equal(h.requests.filter(path => path.endsWith('/original')).length, originalCount);
   h.change('#sort', 'name-asc'); h.change('#sort', 'name-desc');
@@ -877,15 +877,72 @@ test('DOM: RAW-only card gives explicit recovery and refresh updates JPEG+RAW di
   h.click('#landing-connect'); h.click('#confirm-connect');
   await until(() => !h.$('#workspace').hidden && !h.$('#refresh').disabled);
   assert.equal(h.$('#card-formats').hidden, false);
-  assert.match(h.$('#card-formats').textContent, /0 original JPEGs available · 1 RAW files excluded/);
-  assert.match(h.$('#empty-description').textContent, /RAW files but no JPEGs/);
-  assert.match(h.$('#empty-description').textContent, /card reader/);
+  assert.match(h.$('#card-formats').textContent, /0 张 JPEG 原片 · 已排除 1 个 RAW/);
+  assert.match(h.$('#empty-description').textContent, /只有 RAW，没有 JPEG/);
+  assert.match(h.$('#empty-description').textContent, /读卡器/);
   files = ['R1.JPG', 'R1.DNG', 'R1.JPG'];
   h.click('#refresh'); await until(() => h.all('.photo-card').length === 1 && !h.$('#refresh').disabled);
-  assert.match(h.$('#card-formats').textContent, /1 original JPEGs available · 1 RAW files excluded/);
-  assert.match(h.$('#card-formats').textContent, /1 repeated listing entries/);
+  assert.match(h.$('#card-formats').textContent, /1 张 JPEG 原片 · 已排除 1 个 RAW/);
+  assert.match(h.$('#card-formats').textContent, /1 条重复记录/);
   h.click('#disconnect'); await until(() => !h.$('#landing').hidden && !h.$('#try-demo').disabled);
   await h.demo();
   assert.equal(h.$('#card-formats').hidden, true);
   assert.equal(h.$('#card-formats').textContent, '');
+});
+
+test('DOM: failed listing explains that camera identity responded without claiming successful transfer', async t => {
+  const adapter = new CameraAdapter({ fetchImpl: async url => {
+    if (url.endsWith('/props')) return new Response(JSON.stringify({ model: 'RICOH GR III' }));
+    throw new TypeError('synthetic listing interruption');
+  } });
+  const h = await harness(t, { adapter });
+  h.click('#landing-connect'); h.click('#confirm-connect');
+  await until(() => !h.$('#connect-recovery').hidden);
+  assert.match(h.$('#connect-recovery').textContent, /已确认 GR III 型号/);
+  assert.match(h.$('#connect-recovery').textContent, /照片列表未读取完成/);
+  assert.match(h.$('#connect-recovery').textContent, /尚未请求原片/);
+  assert.equal(h.$('#workspace').hidden, true);
+});
+
+test('DOM: Chinese onboarding has two clear actions and keeps advanced filters and diagnostics collapsed', async t => {
+  const h = await harness(t);
+  assert.equal(h.window.document.documentElement.lang, 'zh-CN');
+  assert.match(h.$('#landing-heading').textContent, /把喜欢的照片带回来/);
+  assert.equal(h.$('#landing-connect').textContent.trim(), '连接相机');
+  assert.equal(h.$('#try-demo').textContent, '先试试看');
+  assert.match(h.$('.build-note').textContent, /尚未通过真实相机验证/);
+  await h.demo();
+  assert.equal(h.$('.filter-options').open, false);
+  assert.equal(h.$('.card-diagnostics').open, false);
+  assert.equal(h.$('#transfer-plan').textContent, '');
+  h.$('.filter-options').open = true;
+  h.change('#folder', '100RICOH');
+  assert.equal(h.all('.photo-card').length, 6);
+  assert.equal(h.$('#card-formats').hidden, true); // demo has no camera-returned inventory
+  assert.match(h.$('.card-diagnostics').textContent, /不转换 RAW/);
+  assert.match(h.$('.photo-select input').getAttribute('aria-label'), /^选择 R/);
+});
+
+test('DOM: original verification stays secondary and can be reopened after a completed hash', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer');
+  await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  assert.equal(h.$('.file-verification').tagName, 'DETAILS');
+  assert.equal(h.$('.file-verification').open, false);
+  h.$('.file-verification').open = true; h.click('.verify-original');
+  await until(() => h.$('.verify-original').textContent === '保存校验记录');
+  assert.equal(h.$('.file-verification').open, true);
+  assert.match(h.$('.file-verification .save-note').textContent, /SHA-256: [0-9a-f]{64}/);
+  assert.equal(h.saved.length, 0);
+});
+
+test('DOM: camera failure codes and unexpected transport errors never leak raw English messages', async t => {
+  const h = await harness(t, { adapter: { connect: async () => { throw new AppError('private unlocalized failure details', 'CAMERA_TIMEOUT', 504); } } });
+  h.click('#landing-connect'); h.click('#confirm-connect');
+  await until(() => !h.$('#connect-error').hidden);
+  assert.match(h.$('#connect-error').textContent, /相机响应超时/);
+  assert.doesNotMatch(h.$('#connect-error').textContent, /private|unlocalized/);
+  const errorSource = app.slice(app.indexOf('function cameraErrorMessage('), app.indexOf('async function api('));
+  assert.equal(h.window.eval(`${errorSource}\nuserError(new Error("Failed to fetch"))`), '操作未完成，请检查连接或浏览器支持后重试。');
+  assert.match(h.window.eval(`${errorSource}\ncameraErrorMessage("INCOMPLETE_JPEG")`), /文件不完整/);
+  assert.match(h.window.eval(`${errorSource}\ncameraErrorMessage("INVALID_CSRF")`), /先保存原片/);
 });

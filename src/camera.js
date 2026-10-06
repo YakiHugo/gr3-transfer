@@ -129,15 +129,23 @@ export class CameraAdapter {
       } catch (error) {
         if (error instanceof AppError) throw error;
         if (signal?.aborted) throw new AppError('This operation was cancelled.', 'CANCELLED', 409);
+        if (error?.name === 'TimeoutError') throw new AppError('The camera response timed out. Keep it awake and retry.', 'CAMERA_TIMEOUT', 504);
         throw new AppError('The camera response was incomplete or unfamiliar. Retry the connection.', 'INVALID_CAMERA_RESPONSE');
       }
     }, signal);
   }
 
   async connect(signal) {
-    const properties = safeCameraProperties(await this.json('/props', signal));
-    const inventory = await this.listInventory(signal);
-    return { properties, ...inventory };
+    let stage = 'identity';
+    try {
+      const properties = safeCameraProperties(await this.json('/props', signal));
+      stage = 'listing';
+      const inventory = await this.listInventory(signal);
+      return { properties, ...inventory };
+    } catch (error) {
+      if (error instanceof AppError) error.cameraStage = stage;
+      throw error;
+    }
   }
 
   async listInventory(signal) { return parsePhotoInventory(await this.json('/photos', signal)); }

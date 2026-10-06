@@ -13,8 +13,8 @@ let entryId = 0;
 let unloadGuardActive = false;
 // Reuse locale collation and one derived list, rather than sorting the whole card
 // again for every selection, preview toggle or page navigation.
-const photoNameCollator = new Intl.Collator(undefined, { numeric: true });
-const photoFolderCollator = new Intl.Collator();
+const photoNameCollator = new Intl.Collator('zh-CN', { numeric: true });
+const photoFolderCollator = new Intl.Collator('zh-CN');
 let galleryCache = null;
 const thumbnailFailures = new Map();
 
@@ -34,7 +34,7 @@ function icon(name, small = false) {
   return svg;
 }
 function bytes(value) {
-  if (!Number.isFinite(value) || value < 0) return 'Size unknown';
+  if (!Number.isFinite(value) || value < 0) return '大小未知';
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} KB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
@@ -43,11 +43,11 @@ function knownSize(value) { return typeof value === 'number' && Number.isFinite(
 function dateValue(value) { return value ? Date.parse(value) : NaN; }
 function dateLabel(value) {
   const time = dateValue(value);
-  return Number.isFinite(time) ? new Date(time).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Not supplied';
+  return Number.isFinite(time) ? new Date(time).toLocaleString('zh-CN', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '未提供';
 }
 function safeLocalUrl(value) {
   const url = new URL(value, location.origin);
-  if (url.origin !== location.origin || !['http:', 'https:'].includes(url.protocol)) throw new Error('The bridge returned a non-local photo URL.');
+  if (url.origin !== location.origin || !['http:', 'https:'].includes(url.protocol)) throw new Error('本机程序返回了非本机照片地址，已停止请求。');
   return value;
 }
 function notify(message, error = false) {
@@ -55,13 +55,47 @@ function notify(message, error = false) {
   $('notice').classList.toggle('error', error);
   $('notice').hidden = false;
 }
+// Keep protocol codes stable; present actionable Chinese messages at the UI boundary.
+function cameraErrorMessage(code, status) {
+  const messages = {
+    CAMERA_UNREACHABLE: '无法连接相机。请加入 GR III 的 Wi-Fi，保持相机开机后重试。',
+    CAMERA_TIMEOUT: '相机响应超时。请将相机移近，保持开机后重试。',
+    WRONG_MODEL: '当前设备不是受支持的 RICOH GR III，请检查相机网络。',
+    INVALID_CSRF: '本机会话已更新。请先保存原片，再刷新页面重连。',
+    UNSUPPORTED_RESPONSE: '无法识别相机响应，可能与固件版本有关。请重试一次。',
+    INVALID_CAMERA_RESPONSE: '相机响应不完整，请重新连接。',
+    CAMERA_HTTP_ERROR: '相机未能完成请求，请保持相机开机后重试。',
+    CAMERA_REPORTED_ERROR: '相机报告错误，请关闭其他相机应用后重试。',
+    LIST_TOO_LARGE: '相机返回的照片列表过大，超出此测试版本的安全上限。',
+    ENCODED_RESPONSE: '相机返回了编码后的数据，已停止传输以保护原始文件。',
+    NOT_JPEG: '返回的文件不是 JPEG，已停止传输。',
+    INCOMPLETE_JPEG: 'JPEG 文件不完整，请检查相机连接后重新传输。',
+    INVALID_FILE_SIZE: '文件大小无效或超出限制，已停止传输。',
+    STALE_SESSION: '连接已更新，请从当前照片列表重新选择。',
+    PHOTO_NOT_FOUND: '这张照片已不可用，请刷新列表后重新选择。',
+    DISCONNECTED: '相机已断开，请重新连接后传输。',
+    CANCELLED: '操作已取消。',
+    INVALID_PHOTO_PATH: '照片路径未通过安全检查，已停止请求。',
+    ENDPOINT_NOT_ALLOWED: '相机请求地址未通过安全检查。',
+    INVALID_VARIANT: '不支持此图片类型。',
+    INTERNAL_ERROR: '本机程序遇到问题，请保存已完成原片后重启程序。',
+    BRIDGE_ERROR: '本机程序暂不可用，请确认程序正在运行。',
+  };
+  return messages[code] || `操作未完成${status ? `（${status}）` : ''}，请检查连接后重试。`;
+}
+function userError(error) {
+  if (error?.code) return cameraErrorMessage(error.code);
+  return typeof error?.message === 'string' && /[\u3400-\u9fff]/.test(error.message)
+    ? error.message : '操作未完成，请检查连接或浏览器支持后重试。';
+}
 async function api(path, options = {}) {
   const response = await fetch(path, { cache: 'no-store', credentials: 'same-origin', signal: state.requestController.signal, ...options });
   let result;
-  try { result = await response.json(); } catch { throw new Error('The local bridge returned an unreadable response. Restart it and reload this page.'); }
+  try { result = await response.json(); } catch { throw new Error('无法读取本机程序的响应。请重启程序，再刷新页面。'); }
   if (!response.ok) {
-    const error = new Error(result.error || `Request failed (${response.status}).`);
+    const error = new Error(cameraErrorMessage(result.code, response.status));
     error.code = typeof result.code === 'string' ? result.code : 'BRIDGE_ERROR';
+    error.cameraStage = ['identity', 'listing'].includes(result.cameraStage) ? result.cameraStage : null;
     throw error;
   }
   return result;
@@ -69,7 +103,7 @@ async function api(path, options = {}) {
 async function post(path, body = {}) {
   const generation = state.generation;
   const session = state.session?.csrfToken ? state.session : await api('/api/session');
-  if (generation !== state.generation) throw new DOMException('The previous page session ended.', 'AbortError');
+  if (generation !== state.generation) throw new DOMException('之前的页面会话已结束。', 'AbortError');
   state.session = session;
   return api(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken }, body: JSON.stringify(body) });
 }
@@ -92,7 +126,7 @@ function updateControls() {
   $('cancel-queue').hidden = !state.running;
   $('clear-queue').hidden = state.running;
   $('cancel-connect').hidden = !state.connecting;
-  $('confirm-connect').textContent = state.busy && $('connect-dialog').open ? 'Connecting…' : 'Connect GR III';
+  $('confirm-connect').textContent = state.busy && $('connect-dialog').open ? '正在连接…' : '连接相机';
   $('refresh').setAttribute('aria-busy', String(state.busy));
 }
 function release(entry) {
@@ -106,7 +140,7 @@ function release(entry) {
 function unhandedOriginal(entry) { return Boolean(entry.blob) && entry.status !== 'handed-off' && !entry.archiveHandedOff; }
 function confirmDiscard(entries) {
   const count = entries.filter(unhandedOriginal).length;
-  return !count || window.confirm(`Discard ${count} original${count === 1 ? '' : 's'} not yet sent to your browser? Save first to keep a copy. Removing from this tab cannot be undone; camera files are unchanged.`);
+  return !count || window.confirm(`丢弃这 ${count} 张尚未保存的原片？建议先保存副本。移除后无法恢复本页中的副本，相机上的文件不受影响。`);
 }
 function warnBeforeUnload(event) {
   if (!state.running && !state.queue.some(unhandedOriginal)) return;
@@ -130,7 +164,7 @@ function placeTray() {
   const slot = connected ? $('connected-tray') : $('offline-tray');
   if ($('queue-panel').parentElement !== slot) slot.append($('queue-panel'));
   $('offline-transfers').hidden = connected || !state.queue.length;
-  $('offline-title').textContent = state.queue.some(entry => entry.blob) ? 'Your transferred files are still here.' : 'Transfer stopped.';
+  $('offline-title').textContent = state.queue.some(entry => entry.blob) ? '已传输的原片仍可保存' : '传输已停止';
 }
 function currentSource(entry) { return state.session?.connected && entry.sourceId === state.session.sessionId; }
 function unfinished(entry) { return ['failed', 'cancelled'].includes(entry.status); }
@@ -144,13 +178,13 @@ function renderSession() {
   if (!connected) { $('mobile-selection').hidden = true; document.body.classList.remove('has-selection'); }
   const badge = $('connection-badge');
   badge.className = `status-pill ${connected ? session.mode : ''}`;
-  badge.replaceChildren(element('i'), document.createTextNode(connected ? session.mode === 'demo' ? 'Synthetic demo' : 'Camera · unverified' : 'Disconnected'));
+  badge.replaceChildren(element('i'), document.createTextNode(connected ? session.mode === 'demo' ? '示例演示' : '已连接 · 待实机验证' : '未连接'));
   if (connected) {
     $('demo-banner').hidden = session.mode !== 'demo';
-    $('source-model').textContent = session.mode === 'demo' ? 'Ricoh GR III · demo' : session.model || 'Ricoh GR III';
-    $('source-detail').textContent = session.mode === 'demo' ? 'Synthetic fixtures · no camera connected' : `Wi-Fi · hardware unverified${session.firmware ? ` · Firmware ${session.firmware}` : ''}`;
-    $('source-state').replaceChildren(element('i'), document.createTextNode(session.mode === 'demo' ? 'Demo session' : 'Local bridge'));
-    $('gallery-description').textContent = session.mode === 'demo' ? 'A little practice, before the real thing.' : 'Choose the frames you want to take with you.';
+    $('source-model').textContent = session.mode === 'demo' ? 'Ricoh GR III · 演示' : session.model || 'Ricoh GR III';
+    $('source-detail').textContent = session.mode === 'demo' ? '生成的示例图片 · 未连接相机' : `Wi-Fi · 待实机验证${session.firmware ? ` · 固件 ${session.firmware}` : ''}`;
+    $('source-state').replaceChildren(element('i'), document.createTextNode(session.mode === 'demo' ? '演示模式' : '本机连接'));
+    $('gallery-description').textContent = session.mode === 'demo' ? '先用示例图片体验选择、传输与保存。' : '选择喜欢的照片，带走完整原片。';
   }
   updateControls();
 }
@@ -162,8 +196,8 @@ function applyPhotos(result) {
   const valid = new Set(state.photos.map(photo => photo.id));
   state.selected = new Set([...state.selected].filter(id => valid.has(id)));
   const oldFolder = $('folder').value;
-  $('folder').replaceChildren(new Option('All folders', ''));
-  [...new Set(state.photos.map(photo => photo.folder))].sort().forEach(folder => $('folder').append(new Option(folder || 'Unknown folder', folder)));
+  $('folder').replaceChildren(new Option('全部文件夹', ''));
+  [...new Set(state.photos.map(photo => photo.folder))].sort().forEach(folder => $('folder').append(new Option(folder || '未知文件夹', folder)));
   if ([...$('folder').options].some(option => option.value === oldFolder)) $('folder').value = oldFolder;
   renderGallery();
 }
@@ -171,22 +205,23 @@ function renderCardFormats() {
   const summary = state.cardSummary;
   const panel = $('card-formats');
   panel.hidden = !summary;
-  panel.textContent = summary ? `${summary.jpeg} original JPEGs available · ${summary.raw} RAW files excluded · ${summary.other} other files excluded. JPEG+RAW pairs transfer the JPEG only; RAW is never converted.${summary.duplicateEntries ? ` ${summary.duplicateEntries} repeated listing entries were ignored.` : ''}` : '';
+  panel.textContent = summary ? `${summary.jpeg} 张 JPEG 原片 · 已排除 ${summary.raw} 个 RAW、${summary.other} 个其他文件。JPEG+RAW 仅传输 JPEG，不转换 RAW。${summary.duplicateEntries ? ` 已忽略 ${summary.duplicateEntries} 条重复记录。` : ''}` : '';
 }
 function connectionAdvice(code) {
   const advice = {
-    CAMERA_UNREACHABLE: ['Check the bridge computer’s Wi-Fi', 'Join the network shown by your GR III. A phone joining that network does not connect this computer.', 'Keep the camera awake and close other camera apps, then retry.'],
-    CAMERA_TIMEOUT: ['The camera took too long to respond', 'Move the camera closer and keep it awake.', 'Close other camera apps and retry. No originals were changed.'],
-    WRONG_MODEL: ['Check the connected camera', 'Only a device identifying as RICOH GR III is supported here.', 'Reconnect the bridge computer to your GR III network. Other models are not assumed compatible.'],
-    INVALID_CSRF: ['Refresh the local page', 'The bridge may have restarted. Save any ready originals before reloading.', 'Reload this page, then try the connection again.'],
-    UNSUPPORTED_RESPONSE: ['Camera response not recognized', 'This firmware may use a different response format.', 'Retry once. If it repeats, keep using your existing transfer method; do not change camera settings to work around it.'],
+    CAMERA_UNREACHABLE: ['检查这台电脑的 Wi-Fi', '让运行本机程序的电脑加入 GR III 显示的 Wi-Fi，仅让手机连接是不够的。', '保持相机开机，关闭其他相机应用后重试。'],
+    CAMERA_TIMEOUT: ['相机响应超时', '把相机移近一些，并保持开机。', '关闭其他相机应用后重试，原片没有被修改。'],
+    WRONG_MODEL: ['检查已连接的相机', '目前仅支持设备型号为 RICOH GR III 的相机。', '请让这台电脑重新加入 GR III 网络，其他型号暂不支持。'],
+    INVALID_CSRF: ['刷新本地页面', '本机程序可能已重启。请先保存已完成的原片，再刷新页面。', '刷新页面后重新连接。'],
+    UNSUPPORTED_RESPONSE: ['无法识别相机响应', '这个固件可能使用了不同的响应格式。', '可以重试一次。如果问题持续，请使用原有传输方式，无需为此更改相机设置。'],
   };
-  return advice[code] || ['Connection needs attention', 'Keep the camera awake, check the bridge computer’s Wi-Fi and retry.', 'Ready originals already in this tab remain available to save.'];
+  return advice[code] || ['请检查连接', '保持相机开机，检查这台电脑的 Wi-Fi 后重试。', '本页已完成的原片仍可保存。'];
 }
-function showConnectionAdvice(code) {
+function showConnectionAdvice(code, stage) {
   const [heading, ...steps] = connectionAdvice(code);
   const panel = $('connect-recovery');
   panel.replaceChildren(element('h3', '', heading));
+  if (stage) panel.append(element('p', '', stage === 'listing' ? '已确认 GR III 型号，但照片列表未读取完成，尚未请求原片。' : '尚未确认相机型号，没有读取照片列表或原片。'));
   const list = element('ol');
   steps.forEach(step => list.append(element('li', '', step)));
   panel.append(list);
@@ -216,7 +251,7 @@ async function connect(mode) {
     state.connecting = false;
     closeDialog($('connect-dialog'));
     $('notice').hidden = true;
-    if (mode === 'camera') notify('Camera endpoints responded. This prototype still has not been verified on physical GR III hardware.');
+    if (mode === 'camera') notify('相机已响应。此测试版本仍待真实 GR III 硬件验证。');
   } catch (error) {
     if (generation !== state.generation) return;
     // A failed connection may have reset the server session. Reconcile rather than leaving an old gallery active.
@@ -229,8 +264,8 @@ async function connect(mode) {
     state.selected.clear();
     renderQueue();
     renderSession();
-    const message = error.message || 'Connection failed. Check the bridge and camera Wi-Fi.';
-    if ($('connect-dialog').open) { $('connect-error').textContent = message; $('connect-error').hidden = false; showConnectionAdvice(error.code); }
+    const message = userError(error) || '连接失败，请检查本机程序和相机 Wi-Fi。';
+    if ($('connect-dialog').open) { $('connect-error').textContent = message; $('connect-error').hidden = false; showConnectionAdvice(error.code, error.cameraStage); }
     else notify(message, true);
   } finally {
     if (generation === state.generation) { state.connecting = false; setBusy(false); }
@@ -251,12 +286,12 @@ async function cancelConnection() {
     galleryCache = null;
     state.selected.clear();
     renderGallery(); renderQueue(); renderSession();
-    notify('Connection cancelled. Ready originals are still available to save.');
+    notify('已取消连接，已完成的原片仍可保存。');
   } catch (error) {
     if (generation !== state.generation) return;
     state.session = null; state.photos = []; galleryCache = null; state.selected.clear();
     renderGallery(); renderQueue(); renderSession();
-    notify(`Connection stopped in this tab, but the bridge could not confirm disconnect. Retry the connection before transferring. ${error.message}`, true);
+    notify(`本页已停止连接，但未能确认本机程序已断开。请重新连接后再传输。${userError(error)}`, true);
   } finally { if (generation === state.generation) setBusy(false); }
 }
 async function disconnect() {
@@ -278,10 +313,10 @@ async function disconnect() {
     closeDialog($('preview-dialog'));
     renderQueue();
     renderSession();
-    notify('Disconnected. Completed originals remain in this tab for saving; incomplete transfers were cancelled.');
+    notify('已断开连接。已完成的原片仍可保存，未完成的传输已取消。');
   } catch (error) {
     if (generation !== state.generation) return;
-    notify(`Transfers were stopped, but the bridge could not confirm disconnect. Completed originals are still available. ${error.message}`, true);
+    notify(`已停止传输，但未能确认本机程序已断开。已完成的原片仍可保存。${userError(error)}`, true);
   } finally { if (generation === state.generation) setBusy(false); }
 }
 async function refresh() {
@@ -292,8 +327,8 @@ async function refresh() {
     const result = await post('/api/refresh');
     if (generation !== state.generation) return;
     applyPhotos(result);
-    notify('Contact sheet refreshed. Your current selections were kept where the files are still available.');
-  } catch (error) { if (generation === state.generation) notify(error.message, true); }
+    notify('照片列表已刷新，仍存在的照片会保留选择。');
+  } catch (error) { if (generation === state.generation) notify(userError(error), true); }
   finally { if (generation === state.generation) setBusy(false); }
 }
 function filteredPhotos() {
@@ -331,13 +366,13 @@ function renderSelection() {
   document.body.classList.toggle('has-selection', chosen.length > 0 && Boolean(state.session?.connected));
   const total = chosen.reduce((sum, photo) => sum + (knownSize(photo.bytes) ? photo.bytes : 0), 0);
   const unknown = chosen.filter(photo => !knownSize(photo.bytes)).length;
-  $('selection-size').textContent = !chosen.length ? 'Choose your keepers from the contact sheet.' : unknown ? `${total ? `${bytes(total)} known · ` : ''}${unknown} file size${unknown === 1 ? '' : 's'} unknown` : `${bytes(total)} total · original JPEGs`;
+  $('selection-size').textContent = !chosen.length ? '选几张喜欢的照片吧' : unknown ? `${total ? `已知 ${bytes(total)} · ` : ''}${unknown} 张大小未知` : `共 ${bytes(total)} · JPEG 原片`;
   $('clear-selection').disabled = !chosen.length;
   const visible = currentPage().visible;
   const visibleSelected = visible.filter(photo => state.selected.has(photo.id)).length;
   $('select-visible').disabled = !visible.length;
   $('deselect-visible').disabled = !visibleSelected;
-  $('selection-visibility').textContent = chosen.length ? `${visibleSelected} selected on this page · ${chosen.length - visibleSelected} elsewhere` : 'No frames selected';
+  $('selection-visibility').textContent = chosen.length ? `本页已选 ${visibleSelected} 张 · 其他页 ${chosen.length - visibleSelected} 张` : '尚未选择照片';
   for (const card of $('gallery').children) {
     const selected = state.selected.has(card.dataset.photoId);
     card.classList.toggle('selected', selected);
@@ -345,7 +380,7 @@ function renderSelection() {
   }
   if (state.previewId) {
     const selected = state.selected.has(state.previewId);
-    $('preview-select').textContent = selected ? 'Deselect frame' : 'Select frame';
+    $('preview-select').textContent = selected ? '取消选择' : '选择这张';
     $('preview-select').setAttribute('aria-pressed', String(selected));
     renderPreviewNavigation();
   }
@@ -354,33 +389,33 @@ function renderSelection() {
 function attachThumbnailRecovery(image, photo, card) {
   const generation = state.generation;
   const recovery = element('div', 'thumbnail-recovery');
-  const message = element('span', '', 'Thumbnail unavailable');
-  const retry = element('button', 'text-button', 'Retry thumbnail');
-  retry.type = 'button'; retry.setAttribute('aria-label', `Retry thumbnail for ${photo.name}`);
+  const message = element('span', '', '缩略图暂不可用');
+  const retry = element('button', 'text-button', '重试缩略图');
+  retry.type = 'button'; retry.setAttribute('aria-label', `重试 ${photo.name} 的缩略图`);
   recovery.append(message, retry); recovery.hidden = true;
   const failed = () => {
     const record = thumbnailFailures.get(photo.id) || { attempts: 1 };
     record.failed = true; thumbnailFailures.set(photo.id, record);
-    image.hidden = true; image.alt = `Thumbnail unavailable: ${photo.name}`;
+    image.hidden = true; image.alt = `缩略图不可用：${photo.name}`;
     recovery.hidden = false; retry.disabled = record.attempts >= 3;
-    message.textContent = record.attempts >= 3 ? 'Thumbnail still unavailable. Try Refresh after checking Wi-Fi.' : 'Thumbnail unavailable';
+    message.textContent = record.attempts >= 3 ? '缩略图仍不可用，请检查 Wi-Fi 后刷新。' : '缩略图暂不可用';
   };
   const request = () => {
     try { image.removeAttribute('src'); image.src = safeLocalUrl(photo.thumbnailUrl); }
-    catch { failed(); retry.disabled = true; message.textContent = 'Thumbnail URL unavailable. Refresh the contact sheet.'; }
+    catch { failed(); retry.disabled = true; message.textContent = '缩略图地址不可用，请刷新照片列表。'; }
   };
   image.addEventListener('error', () => { if (generation === state.generation && image.isConnected) failed(); });
   image.addEventListener('load', () => {
     if (generation !== state.generation || !image.isConnected) return;
     thumbnailFailures.delete(photo.id); recovery.hidden = true; image.hidden = false;
-    image.alt = photo.synthetic ? `Synthetic demo composition: ${photo.name}` : `Preview of ${photo.name}`;
+    image.alt = photo.synthetic ? `生成的示例图片：${photo.name}` : `${photo.name} 的预览图`;
   });
   retry.addEventListener('click', () => {
     if (generation !== state.generation || !image.isConnected || !state.session?.connected) return;
     const record = thumbnailFailures.get(photo.id);
     if (!record?.failed || record.attempts >= 3) return;
     record.attempts++; record.failed = false; retry.disabled = true;
-    message.textContent = 'Retrying thumbnail…'; request();
+    message.textContent = '正在重试缩略图…'; request();
   });
   card.append(recovery);
   // A rerender must not silently restart an interrupted retry or reset its budget.
@@ -394,9 +429,9 @@ function renderGallery() {
     card.dataset.photoId = photo.id;
     const preview = element('button', 'photo-image-button');
     preview.type = 'button';
-    preview.setAttribute('aria-label', `Preview ${photo.name}${photo.synthetic ? ', synthetic demo image' : ''}`);
+    preview.setAttribute('aria-label', `预览 ${photo.name}${photo.synthetic ? '，示例图片' : ''}`);
     const image = element('img');
-    image.alt = photo.synthetic ? `Synthetic demo composition: ${photo.name}` : `Preview of ${photo.name}`;
+    image.alt = photo.synthetic ? `生成的示例图片：${photo.name}` : `${photo.name} 的预览图`;
     image.loading = 'lazy';
     image.decoding = 'async';
     image.draggable = false;
@@ -405,7 +440,7 @@ function renderGallery() {
     const label = element('label', 'photo-select');
     const checkbox = element('input');
     checkbox.type = 'checkbox';
-    checkbox.setAttribute('aria-label', `Select ${photo.name}`);
+    checkbox.setAttribute('aria-label', `选择 ${photo.name}`);
     checkbox.addEventListener('change', () => toggleSelection(photo.id));
     label.append(checkbox, icon('check'));
     const meta = element('div', 'photo-meta');
@@ -413,14 +448,14 @@ function renderGallery() {
     const title = element('h3', '', photo.name);
     title.title = photo.name;
     detail.append(title, element('p', '', `${photo.folder} · ${bytes(photo.bytes)}`));
-    meta.append(detail, element('span', 'photo-type', photo.synthetic ? 'DEMO / JPG' : 'JPG'));
+    meta.append(detail, element('span', 'photo-type', photo.synthetic ? '示例' : 'JPG'));
     card.append(preview, label, meta);
     $('gallery').append(card);
     attachThumbnailRecovery(image, photo, card);
   });
-  $('photo-count').textContent = `${list.length} frame${list.length === 1 ? '' : 's'}${list.length !== state.photos.length ? ` of ${state.photos.length}` : ''}`;
+  $('photo-count').textContent = `${list.length} 张照片${list.length !== state.photos.length ? ` / 共 ${state.photos.length} 张` : ''}`;
   $('gallery-empty').hidden = list.length !== 0;
-  $('empty-description').textContent = state.photos.length ? ($('selected-only').checked ? 'No selected frames match these filters. Clear the review filter to choose more frames.' : 'Try a different filename or folder.') : state.cardSummary?.raw ? 'This listing contains RAW files but no JPEGs. RAW transfer is not supported. Use a card reader or your existing RAW transfer app; this app never converts RAW or changes camera settings.' : 'No JPEGs were returned by this source. Try Refresh after checking the camera.';
+  $('empty-description').textContent = state.photos.length ? ($('selected-only').checked ? '已选照片中没有符合筛选条件的项目。取消“只看已选”可继续选片。' : '试试其他文件名或文件夹。') : state.cardSummary?.raw ? '存储卡列表只有 RAW，没有 JPEG。目前不支持 RAW 传输，请使用读卡器或原有 RAW 工具。此应用不会转换 RAW 或修改相机设置。' : '相机没有返回 JPEG 照片，请检查相机后刷新。';
   $('reset-filters').hidden = !state.photos.length;
   renderPagination(list.length);
   renderSelection();
@@ -430,17 +465,17 @@ function renderPagination(total) {
   if (!pager) {
     pager = element('nav', 'pagination');
     pager.id = 'pagination';
-    pager.setAttribute('aria-label', 'Contact sheet pages');
+    pager.setAttribute('aria-label', '照片分页');
     $('gallery').after(pager);
   }
   pager.replaceChildren();
   const pages = Math.ceil(total / PAGE_SIZE);
   pager.hidden = pages <= 1;
   if (pages <= 1) return;
-  const previous = element('button', 'button secondary compact', 'Previous');
+  const previous = element('button', 'button secondary compact', '上一页');
   previous.type = 'button'; previous.disabled = state.page === 1;
   previous.addEventListener('click', () => { state.page--; renderGallery(); $('search').focus({ preventScroll: true }); });
-  const next = element('button', 'button secondary compact', 'Next');
+  const next = element('button', 'button secondary compact', '下一页');
   next.type = 'button'; next.disabled = state.page === pages;
   next.addEventListener('click', () => { state.page++; renderGallery(); $('search').focus({ preventScroll: true }); });
   pager.append(previous, element('span', '', `${state.page} / ${pages}`), next);
@@ -462,7 +497,7 @@ function renderPreviewNavigation() {
   const index = list.findIndex(photo => photo.id === state.previewId);
   $('preview-previous').disabled = index <= 0;
   $('preview-next').disabled = index < 0 || index >= list.length - 1;
-  $('preview-position').textContent = index < 0 ? 'Outside current filters' : `${index + 1} / ${list.length}`;
+  $('preview-position').textContent = index < 0 ? '不在当前筛选范围' : `${index + 1} / ${list.length}`;
 }
 function navigatePreview(offset) {
   if (!$('preview-dialog').open || !state.previewId) return;
@@ -476,31 +511,31 @@ function showPreview(id) {
   if (!photo) return;
   state.previewId = id;
   $('preview-title').textContent = photo.name;
-  $('preview-folder').textContent = photo.folder || 'Unknown folder';
+  $('preview-folder').textContent = photo.folder || '未知文件夹';
   $('preview-size').textContent = bytes(photo.bytes);
-  $('preview-dimensions').textContent = Number.isFinite(photo.width) && Number.isFinite(photo.height) ? `${photo.width} × ${photo.height} px` : 'Not supplied';
+  $('preview-dimensions').textContent = Number.isFinite(photo.width) && Number.isFinite(photo.height) ? `${photo.width} × ${photo.height} px` : '未提供';
   $('preview-date').textContent = dateLabel(photo.takenAt);
   $('preview-synthetic').hidden = !photo.synthetic;
-  $('preview-image').alt = photo.synthetic ? `Synthetic demo composition: ${photo.name}` : `Preview of ${photo.name}`;
+  $('preview-image').alt = photo.synthetic ? `生成的示例图片：${photo.name}` : `${photo.name} 的预览图`;
   $('preview-image').removeAttribute('src');
-  try { $('preview-image').src = safeLocalUrl(photo.previewUrl || photo.thumbnailUrl); } catch { $('preview-image').alt = 'Preview unavailable'; }
+  try { $('preview-image').src = safeLocalUrl(photo.previewUrl || photo.thumbnailUrl); } catch { $('preview-image').alt = '预览暂不可用'; }
   renderSelection();
   openDialog($('preview-dialog'));
 }
 function showHelp(kind) {
   const phone = kind === 'phone';
-  $('help-title').textContent = phone ? 'A phone-sized view. A local bridge.' : 'Originals, all the way through.';
+  $('help-title').textContent = phone ? '连接与使用' : '传输与保存';
   $('help-content').replaceChildren();
   const sections = phone ? [
-    ['Where this runs', 'This page adapts to a phone screen, but the bridge currently listens only on the computer’s localhost address. Opening that address on your phone will not reach this computer.'],
-    ['Reaching it from a phone', 'Phone access would require a separate, approved local-network setup with appropriate access protection. This prototype does not change your firewall, expose a server, or provide a phone pairing link.'],
-    ['Saving on a phone', 'If a future supported setup makes the page reachable, your browser controls the save destination. A file may go to Downloads or Files; adding it to your Photos library is a separate platform-specific action.']
+    ['在这台电脑上使用', '此网页通过本机程序连接相机，只监听这台电脑的 localhost 地址。请在运行程序的电脑上打开它；手机访问自己的 localhost 无法连接这台电脑。'],
+    ['在 Android 手机上使用', '项目另有 Android 10 及以上的原生测试应用，可通过手机已连接的相机 Wi-Fi 直接传输。网页不会配置防火墙、开放局域网服务或更改网络设置。真实相机与手机兼容性仍待验证。'],
+    ['你的照片留在本机', '照片不会通过此应用上传。桌面端保存到浏览器的下载位置；Android 端需要明确确认后才写入 Pictures。系统或相册已启用的云备份可能自行上传已保存照片。']
   ] : [
-    ['1. Choose and transfer', 'Select JPEGs from the contact sheet, then choose Transfer originals. Files transfer one at a time from the source into browser memory. Progress is measured in bytes; a percentage appears only when the source provides a file size.'],
-    ['2. Save originals individually or together', 'Choose Save for a ready JPEG, or prepare a ZIP containing all ready JPEGs, camera folders and a SHA-256 manifest. Individual filenames include a folder prefix. ZIPs keep the original filenames inside directories. Neither method rewrites image bytes or EXIF. Check Downloads or Files: handing a file to the browser does not prove it reached disk.'],
-    ['Keep the session small', 'The tray can hold up to 48 entries and 256 MB of file data. Each file is limited to 128 MB. Save and remove files, or clear the tray, before transferring more. Disconnect keeps completed files available in this tab. Clear or closing/reloading this page discards unsaved files from memory.'],
-    ['Recover an interrupted batch', 'Restore the camera Wi-Fi connection on the bridge computer, then choose Retry unfinished to retry eligible failed and cancelled files from this connection. Each file restarts from the beginning; ready JPEGs are kept. Individual Retry only retries that frame. There are at most three attempts per entry. After disconnecting or switching sources, reconnect and reselect files from the current contact sheet instead.'],
-    ['A prototype, honestly', 'Demo images are synthetic fixtures. Real Ricoh GR III Wi-Fi transfer has not been tested on physical hardware. The camera must be connected to the bridge computer over Wi-Fi; Bluetooth is not used for original-file transfer.']
+    ['1. 选择并传输', '选择照片，点击“传输原片”。原片会逐张读取到本页的临时内存，保留 JPEG 与 EXIF 原始字节。仅在已知文件大小时显示百分比。'],
+    ['2. 保存到电脑', '点击单张照片的“保存”，或将已完成原片打包为 ZIP 后保存。ZIP 保留文件夹和原始文件名，附带 SHA-256 校验清单。请到下载文件夹确认文件；浏览器接收下载不等于已经写入磁盘。'],
+    ['关闭页面前先保存', '临时记录最多保留 48 项、256 MB，每张原片上限 128 MB。断开连接会保留已完成原片；清空、关闭或刷新页面会丢弃未保存内容。请分批传输和保存。'],
+    ['传输中断了？', '恢复相机 Wi-Fi 后，点击“重试未完成项”。只重试当前连接中失败或取消的文件，每张从头开始，最多尝试三次。更换来源或重新连接后，请从当前照片列表重新选择。'],
+    ['关于这个测试版本', '演示图片是生成的测试素材。真实理光 GR III 的 Wi-Fi 传输尚未通过物理硬件验证，目前不支持 RAW、GR IIIx 或 GR IV。']
   ];
   sections.forEach(([title, body]) => $('help-content').append(element('h3', '', title), element('p', '', body)));
   openDialog($('help-dialog'));
@@ -512,25 +547,25 @@ function transferPlan() {
   const unknown = additions.filter(photo => !knownSize(photo.bytes)).length;
   const knownBytes = additions.reduce((sum, photo) => sum + (knownSize(photo.bytes) ? photo.bytes : 0), 0);
   let blocked = '';
-  if (state.queue.length + additions.length > QUEUE_LIMIT) blocked = `The tray holds ${QUEUE_LIMIT} entries. Select fewer frames or clear completed entries first.`;
-  else if (additions.some(photo => knownSize(photo.bytes) && photo.bytes > FILE_LIMIT)) blocked = 'A selected original exceeds the 128 MB per-file limit. Deselect it before transferring this batch.';
-  else if (state.retained + state.leasedBytes + knownBytes > MEMORY_LIMIT) blocked = 'This batch exceeds the 256 MB tray budget. Select fewer frames, or save and remove ready originals. Recent download links can take 30 seconds to release.';
+  if (state.queue.length + additions.length > QUEUE_LIMIT) blocked = `最多同时保留 ${QUEUE_LIMIT} 项，请少选几张，或先清理已完成项目。`;
+  else if (additions.some(photo => knownSize(photo.bytes) && photo.bytes > FILE_LIMIT)) blocked = '选中的原片超过 128 MB 单文件限制，请取消选择该照片。';
+  else if (state.retained + state.leasedBytes + knownBytes > MEMORY_LIMIT) blocked = '这批照片超过 256 MB 暂存上限。请少选几张，或先保存并移除已完成原片。下载链接最多需要 30 秒释放。';
   return { additions, unknown, knownBytes, duplicates: selected.length - additions.length, blocked };
 }
 function renderTransferPlan() {
   const plan = transferPlan();
-  const parts = [`${state.queue.length} / ${QUEUE_LIMIT} tray slots used`, `${bytes(state.retained)} retained`];
-  if (plan.additions.length) parts.push(`${plan.additions.length} new originals`, `${bytes(plan.knownBytes)} known${plan.unknown ? ` + ${plan.unknown} unknown sizes` : ''}`);
-  if (plan.duplicates) parts.push(`${plan.duplicates} already in tray; skipped`);
-  if (state.leasedBytes) parts.push(`${bytes(state.leasedBytes)} in temporary download links`);
-  $('transfer-plan').textContent = plan.blocked || parts.join(' · ') + (plan.unknown ? '. Unknown sizes are checked while transferring; use a smaller batch if memory is limited.' : '');
+  const parts = [`暂存 ${state.queue.length} / ${QUEUE_LIMIT} 项`, `已暂存 ${bytes(state.retained)}`];
+  if (plan.additions.length) parts.push(`新传输 ${plan.additions.length} 张`, `已知 ${bytes(plan.knownBytes)}${plan.unknown ? `，另有 ${plan.unknown} 张大小未知` : ''}`);
+  if (plan.duplicates) parts.push(`跳过 ${plan.duplicates} 张已在列表中的照片`);
+  if (state.leasedBytes) parts.push(`下载链接暂占 ${bytes(state.leasedBytes)}`);
+  $('transfer-plan').textContent = !state.selected.size && !state.queue.length ? '' : plan.blocked || parts.join(' · ') + (plan.unknown ? '。大小未知的文件会在传输时检查，内存有限时请分批传输。' : '');
   $('transfer-plan').classList.toggle('blocked', Boolean(plan.blocked));
 }
 function addToQueue() {
   if (state.running || state.busy || state.exporting || state.verifying) return;
   const plan = transferPlan();
   const additions = plan.additions;
-  if (!additions.length) { notify('These frames are already in the transfer tray. Save ready files, retry a failed transfer, or remove an entry to transfer it again.'); return; }
+  if (!additions.length) { notify('这些照片已在传输记录中。可保存原片、重试失败项，或移除后重新传输。'); return; }
   if (plan.blocked) { notify(plan.blocked, true); return; }
   invalidateArchive();
   additions.forEach(photo => state.queue.push({ id: ++entryId, sourceId: state.session.sessionId, sourceMode: state.session.mode, photo: { ...photo }, status: 'queued', received: 0, expected: knownSize(photo.bytes) ? photo.bytes : null, attempts: 0, objectUrl: null, blob: null, blobBytes: 0, retryable: true, error: '' }));
@@ -539,16 +574,16 @@ function addToQueue() {
 }
 function durationLabel(seconds) {
   const whole = Math.max(0, Math.floor(seconds));
-  return whole < 60 ? `${whole}s` : `${Math.floor(whole / 60)}m ${whole % 60}s`;
+  return whole < 60 ? `${whole} 秒` : `${Math.floor(whole / 60)} 分 ${whole % 60} 秒`;
 }
 function transferTiming(entry) {
   if (!Number.isFinite(entry.startedAt)) return '';
   const seconds = Math.max(0, ((entry.finishedAt ?? performance.now()) - entry.startedAt) / 1000);
-  const parts = [`${durationLabel(seconds)} elapsed`];
+  const parts = [`已用 ${durationLabel(seconds)}`];
   if (seconds >= 1 && entry.received > 0) {
     const rate = entry.received / seconds;
-    parts.push(`${bytes(rate)}/s average`);
-    if (knownSize(entry.expected) && entry.expected > entry.received) parts.push(`about ${durationLabel((entry.expected - entry.received) / rate)} remaining`);
+    parts.push(`平均 ${bytes(rate)}/秒`);
+    if (knownSize(entry.expected) && entry.expected > entry.received) parts.push(`约剩 ${durationLabel((entry.expected - entry.received) / rate)}`);
   }
   return parts.join(' · ');
 }
@@ -563,20 +598,20 @@ async function verifyOriginal(entry) {
     if (controller.signal.aborted || generation !== state.generation || entry.blob !== blob || !state.queue.includes(entry)) return;
     entry.receipt = receipt;
   } catch (error) {
-    if (generation === state.generation) entry.verificationError = controller.signal.aborted ? 'Verification cancelled. Your original is still ready to save.' : `Verification unavailable: ${error.message}`;
+    if (generation === state.generation) entry.verificationError = controller.signal.aborted ? '已取消校验，原片仍可保存。' : `暂时无法校验：${userError(error)}`;
   } finally {
     entry.verifying = false;
     if (state.receiptController === controller) { state.verifying = false; state.receiptController = null; renderQueue(); }
   }
 }
 function itemStatus(entry) {
-  if (entry.status === 'queued') return 'Waiting its turn';
-  if (entry.status === 'transferring') return `${bytes(entry.received)}${knownSize(entry.expected) ? ` / ${bytes(entry.expected)}` : ' transferred · size unknown'} · ${transferTiming(entry)}`;
-  if (entry.status === 'ready') return `${bytes(entry.blobBytes)} · ready to save`;
-  if (entry.status === 'handed-off') return 'Sent to browser · check Downloads';
-  if (unfinished(entry) && !currentSource(entry)) return 'Source disconnected or changed · reconnect and reselect this frame';
-  if (entry.status === 'cancelled') return `Cancelled · no file saved${entry.attempts >= MAX_ATTEMPTS ? ' · Retry limit reached; remove and reselect after checking the connection.' : ''}`;
-  return entry.error || 'Transfer failed · no file saved';
+  if (entry.status === 'queued') return '等待传输';
+  if (entry.status === 'transferring') return `${bytes(entry.received)}${knownSize(entry.expected) ? ` / ${bytes(entry.expected)}` : ' 已传输 · 总大小未知'} · ${transferTiming(entry)}`;
+  if (entry.status === 'ready') return `${bytes(entry.blobBytes)} · 等待保存`;
+  if (entry.status === 'handed-off') return '已交给浏览器 · 请检查下载文件夹';
+  if (unfinished(entry) && !currentSource(entry)) return '来源已断开或变更，请重新连接并选择这张照片';
+  if (entry.status === 'cancelled') return `已取消 · 未保存文件${entry.attempts >= MAX_ATTEMPTS ? ' · 已达到重试上限，请检查连接后移除并重新选择。' : ''}`;
+  return entry.error || '传输失败 · 未保存文件';
 }
 function renderQueue() {
   $('queue-panel').hidden = state.queue.length === 0;
@@ -592,29 +627,31 @@ function renderQueue() {
     else img.hidden = true;
     const info = element('div', 'queue-item-info');
     const name = element('p', 'queue-item-name', entry.photo.name); name.title = entry.photo.name;
-    info.append(name, element('p', 'queue-item-source', `${entry.photo.folder} · ${entry.sourceMode === 'demo' ? 'synthetic demo' : 'GR III source'}`), element('p', 'queue-item-status', itemStatus(entry)));
-    if (entry.blob) info.append(element('p', 'queue-save-name', `Save as ${GRTransferFiles.downloadName(entry.photo)}`));
+    info.append(name, element('p', 'queue-item-source', `${entry.photo.folder} · ${entry.sourceMode === 'demo' ? '示例图片' : 'GR III 相机'}`), element('p', 'queue-item-status', itemStatus(entry)));
+    if (entry.blob) info.append(element('p', 'queue-save-name', `保存为 ${GRTransferFiles.downloadName(entry.photo)}`));
     top.append(img, info);
     if (entry.status === 'ready' || entry.status === 'handed-off') {
-      const save = element('button', 'button secondary', entry.status === 'ready' ? 'Save' : 'Save again');
-      save.type = 'button'; save.setAttribute('aria-label', `Save ${entry.photo.name}`);
+      const save = element('button', 'button secondary', entry.status === 'ready' ? '保存' : '再次保存');
+      save.type = 'button'; save.setAttribute('aria-label', `保存 ${entry.photo.name}`);
       save.addEventListener('click', () => saveEntry(entry)); top.append(save);
     } else if (canRetry(entry)) {
-      const retry = element('button', 'button secondary', 'Retry');
+      const retry = element('button', 'button secondary', '重试');
       retry.type = 'button'; retry.disabled = state.running || state.busy || state.exporting || state.verifying;
-      retry.setAttribute('aria-label', `Retry ${entry.photo.name}`);
+      retry.setAttribute('aria-label', `重试 ${entry.photo.name}`);
       retry.addEventListener('click', () => retryEntries([entry]));
       top.append(retry);
     }
     row.append(top);
     if (entry.blob) {
-      const verification = element('div', 'file-verification');
-      const verify = element('button', 'text-button verify-original', entry.verifying ? 'Cancel verification' : entry.receipt ? 'Save verification receipt' : 'Verify original bytes');
+      const verification = element('details', 'file-verification');
+      verification.open = Boolean(entry.verifying || entry.receipt || entry.verificationError);
+      verification.append(element('summary', '', '文件校验'));
+      const verify = element('button', 'text-button verify-original', entry.verifying ? '取消校验' : entry.receipt ? '保存校验记录' : '校验原片');
       verify.type = 'button';
       verify.disabled = !entry.verifying && (state.running || state.exporting || state.verifying);
       verify.addEventListener('click', () => {
         if (entry.verifying) state.receiptController?.abort();
-        else if (entry.receipt) { try { handoffDownload(entry.receipt.blob, entry.receipt.filename); notify('Verification receipt sent to browser. It does not contain the JPEG; save the original separately.'); } catch (error) { notify(error.message, true); } }
+        else if (entry.receipt) { try { handoffDownload(entry.receipt.blob, entry.receipt.filename); notify('校验记录已交给浏览器，记录不包含照片，请另行保存原片。'); } catch (error) { notify(userError(error), true); } }
         else verifyOriginal(entry);
       });
       verification.append(verify);
@@ -624,13 +661,13 @@ function renderQueue() {
     }
     if (entry.status === 'transferring') {
       const progress = element('progress');
-      progress.setAttribute('aria-label', `Transfer progress for ${entry.photo.name}`);
+      progress.setAttribute('aria-label', `${entry.photo.name} 的传输进度`);
       if (knownSize(entry.expected) && entry.expected > 0) { progress.max = entry.expected; progress.value = entry.received; }
       row.append(progress);
     } else if (!['queued'].includes(entry.status)) {
-      const remove = element('button', 'text-button queue-remove', 'Remove');
+      const remove = element('button', 'text-button queue-remove', '移除');
       remove.type = 'button'; remove.disabled = state.running || state.exporting || state.verifying;
-      remove.setAttribute('aria-label', `Remove ${entry.photo.name} from the transfer tray`);
+      remove.setAttribute('aria-label', `从传输记录中移除 ${entry.photo.name}`);
       remove.addEventListener('click', () => { if (state.running || state.exporting || state.verifying || !confirmDiscard([entry])) return; invalidateArchive(); release(entry); state.queue = state.queue.filter(item => item !== entry); renderQueue(); });
       row.append(remove);
     }
@@ -648,26 +685,26 @@ function updateQueueSummary() {
   const failed = state.queue.filter(entry => entry.status === 'failed').length;
   const cancelled = state.queue.filter(entry => entry.status === 'cancelled').length;
   const waiting = state.queue.filter(entry => entry.status === 'queued').length;
-  const parts = [state.running && 'Transferring one file at a time', ready && `${ready} ready to save`, handed && `${handed} handed to browser`, waiting && `${waiting} waiting`, failed && `${failed} failed`, cancelled && `${cancelled} cancelled`].filter(Boolean);
-  $('queue-summary').textContent = parts.join(' · ') || 'No active transfers';
+  const parts = [state.running && '正在逐张传输', ready && `${ready} 张待保存`, handed && `${handed} 张已交给浏览器`, waiting && `${waiting} 张等待中`, failed && `${failed} 张失败`, cancelled && `${cancelled} 张已取消`].filter(Boolean);
+  $('queue-summary').textContent = parts.join(' · ') || '暂无传输';
 }
 function renderRecovery() {
   const stopped = state.queue.filter(unfinished);
   const eligible = stopped.filter(canRetry);
   $('queue-recovery').hidden = !stopped.length || state.running;
   $('retry-unfinished').hidden = !eligible.length;
-  $('retry-unfinished').textContent = `Retry unfinished (${eligible.length})`;
+  $('retry-unfinished').textContent = `重试未完成项（${eligible.length}）`;
   const notes = [];
   if (eligible.length) {
-    if (state.session?.mode === 'camera') notes.push('Restore camera Wi-Fi first.');
-    notes.push('Retry failed and cancelled files from this connection, from the beginning. Ready JPEGs are kept.');
+    if (state.session?.mode === 'camera') notes.push('请先恢复相机 Wi-Fi。');
+    notes.push('从头重试本次连接中失败或取消的文件，已完成原片会保留。');
   }
   const stale = stopped.filter(entry => !currentSource(entry)).length;
   const expired = stopped.filter(entry => currentSource(entry) && entry.retryable === false).length;
   const exhausted = stopped.filter(entry => currentSource(entry) && entry.retryable !== false && entry.attempts >= MAX_ATTEMPTS).length;
-  if (stale) notes.push(`${stale} from a disconnected or changed source: reconnect and reselect from the contact sheet.`);
-  if (expired) notes.push(`${expired} no longer available through this connection: reconnect and reselect from the contact sheet.`);
-  if (exhausted) notes.push(`${exhausted} reached the ${MAX_ATTEMPTS}-attempt limit: check the connection, then remove and reselect those frames.`);
+  if (stale) notes.push(`${stale} 项的来源已断开或变更，请重新连接并选片。`);
+  if (expired) notes.push(`${expired} 项在本次连接中已失效，请重新连接并选片。`);
+  if (exhausted) notes.push(`${exhausted} 项已达到 ${MAX_ATTEMPTS} 次尝试上限，请检查连接后移除并重新选择。`);
   $('recovery-note').textContent = notes.join(' ');
 }
 function retryEntries(entries) {
@@ -701,22 +738,22 @@ async function transferEntry(entry, signal, generation) {
   let reader;
   let response;
   try {
-    if (!currentSource(entry)) { entry.retryable = false; throw new Error('The source changed. Reconnect and reselect this frame.'); }
-    if (knownSize(entry.expected) && entry.expected > FILE_LIMIT) throw new Error('This file exceeds the 128 MB per-file limit.');
-    if (knownSize(entry.expected) && state.retained + state.leasedBytes + entry.expected > MEMORY_LIMIT) throw new Error('Tray memory is full. Save and remove ready files, then retry. Recent browser downloads may need up to 30 seconds to release their download links.');
+    if (!currentSource(entry)) { entry.retryable = false; throw new Error('来源已变更，请重新连接并选择这张照片。'); }
+    if (knownSize(entry.expected) && entry.expected > FILE_LIMIT) throw new Error('此文件超过 128 MB 单文件限制。');
+    if (knownSize(entry.expected) && state.retained + state.leasedBytes + entry.expected > MEMORY_LIMIT) throw new Error('暂存空间已满。请保存并移除已完成原片后重试，下载链接最多需要 30 秒释放。');
     response = await fetch(safeLocalUrl(entry.photo.originalUrl), { signal, cache: 'no-store', credentials: 'same-origin' });
     if (!response.ok) {
       const failure = await response.json().catch(() => ({}));
       if (['STALE_SESSION', 'PHOTO_NOT_FOUND', 'DISCONNECTED'].includes(failure.code)) entry.retryable = false;
-      throw new Error(`${failure.error || `Transfer failed (${response.status}).`}${entry.retryable ? '' : ' Reconnect and reselect this frame; this old transfer cannot be retried.'}`);
+      throw new Error(`${cameraErrorMessage(failure.code, response.status)}${entry.retryable ? '' : ' 请重新连接并选择这张照片，此旧传输无法重试。'}`);
     }
     const contentType = response.headers.get('Content-Type') || '';
-    if (!contentType.toLowerCase().startsWith('image/jpeg')) throw new Error('The source did not return a JPEG. No file was prepared.');
+    if (!contentType.toLowerCase().startsWith('image/jpeg')) throw new Error('来源未返回 JPEG，未生成文件。');
     const header = response.headers.get('X-File-Size') || response.headers.get('Content-Length');
     if (header && /^\d+$/.test(header)) entry.expected = Number(header);
-    if (knownSize(entry.expected) && entry.expected > FILE_LIMIT) throw new Error('This file exceeds the 128 MB per-file limit.');
-    if (knownSize(entry.expected) && state.retained + state.leasedBytes + entry.expected > MEMORY_LIMIT) throw new Error('Tray memory is full. Save and remove ready files, then retry. Recent browser downloads may need up to 30 seconds to release their download links.');
-    if (!response.body?.getReader) throw new Error('Streaming downloads are unavailable in this browser. Try a current desktop browser.');
+    if (knownSize(entry.expected) && entry.expected > FILE_LIMIT) throw new Error('此文件超过 128 MB 单文件限制。');
+    if (knownSize(entry.expected) && state.retained + state.leasedBytes + entry.expected > MEMORY_LIMIT) throw new Error('暂存空间已满。请保存并移除已完成原片后重试，下载链接最多需要 30 秒释放。');
+    if (!response.body?.getReader) throw new Error('此浏览器不支持流式下载，请使用较新的桌面浏览器。');
     reader = response.body.getReader();
     const chunks = [];
     let lastPaint = 0;
@@ -727,13 +764,13 @@ async function transferEntry(entry, signal, generation) {
       entry.received += value.byteLength;
       if (entry.received > FILE_LIMIT || state.retained + state.leasedBytes + entry.received > MEMORY_LIMIT) {
         await reader.cancel();
-        throw new Error('Tray memory limit reached. Save and remove ready files, then retry. Recent download links may need up to 30 seconds to release.');
+        throw new Error('已达到暂存上限。请保存并移除已完成原片后重试，下载链接最多需要 30 秒释放。');
       }
       chunks.push(value);
       if (performance.now() - lastPaint > 100) { updateEntryProgress(entry); lastPaint = performance.now(); }
     }
-    if (!entry.received) throw new Error('The source returned an empty file. No file was prepared.');
-    if (knownSize(entry.expected) && entry.expected !== entry.received) throw new Error('The transfer ended with a size mismatch. Retry before saving.');
+    if (!entry.received) throw new Error('来源返回了空文件，未生成文件。');
+    if (knownSize(entry.expected) && entry.expected !== entry.received) throw new Error('传输文件大小不匹配，请重试后再保存。');
     if (signal.aborted || generation !== state.generation) throw new DOMException('Cancelled', 'AbortError');
     const blob = new Blob(chunks, { type: 'image/jpeg' });
     const objectUrl = URL.createObjectURL(blob);
@@ -751,7 +788,7 @@ async function transferEntry(entry, signal, generation) {
     // a ready file produced by a subsequent retry if the disconnect request failed.
     if (generation !== state.generation || attempt !== entry.attempts) return;
     entry.status = signal.aborted || error.name === 'AbortError' ? 'cancelled' : 'failed';
-    entry.error = entry.status === 'failed' ? `${error.message || 'Connection interrupted. No file was prepared.'}${entry.attempts >= MAX_ATTEMPTS ? ' Retry limit reached; remove and reselect after checking the connection.' : ''}` : '';
+    entry.error = entry.status === 'failed' ? `${userError(error) || '连接中断，未生成文件。'}${entry.attempts >= MAX_ATTEMPTS ? ' 已达到重试上限，请检查连接后移除并重新选择。' : ''}` : '';
   } finally { clearInterval(progressTimer); if (reader) { try { reader.releaseLock(); } catch { /* Reader already released. */ } } }
 }
 async function runQueue() {
@@ -792,7 +829,7 @@ function handoffDownload(blob, filename) {
   // link before the browser consumes the asynchronous anchor navigation.
   let lease = state.downloadLeases.get(blob);
   if (!lease) {
-    if (state.leasedBytes + blob.size > DOWNLOAD_LEASE_LIMIT) throw new Error('Recent downloads are still being handed to the browser. Wait up to 30 seconds before saving another batch.');
+    if (state.leasedBytes + blob.size > DOWNLOAD_LEASE_LIMIT) throw new Error('上一批文件仍在交给浏览器，请等待最多 30 秒后再保存。');
     lease = { objectUrl: URL.createObjectURL(blob), bytes: blob.size, timer: null };
     state.downloadLeases.set(blob, lease);
     state.leasedBytes += blob.size;
@@ -810,12 +847,12 @@ function handoffDownload(blob, filename) {
   try { anchor.click(); } finally { anchor.remove(); }
 }
 function saveEntry(entry) {
-  if (!entry.objectUrl || !entry.blob) { notify('This transfer is no longer available in memory. Remove it from the tray and transfer the frame again.', true); return; }
+  if (!entry.objectUrl || !entry.blob) { notify('暂存原片已失效，请移除此项后重新传输。', true); return; }
   try {
     handoffDownload(entry.blob, GRTransferFiles.downloadName(entry.photo));
     entry.status = 'handed-off';
     renderQueue();
-  } catch (error) { notify(`The JPEG could not be handed to your browser. ${error.message}`, true); }
+  } catch (error) { notify(`未能将 JPEG 交给浏览器。${userError(error)}`, true); }
 }
 
 function invalidateArchive() {
@@ -833,16 +870,16 @@ async function prepareArchive() {
   const signal = state.archiveController.signal;
   const generation = state.generation;
   renderQueue();
-  $('archive-status').textContent = 'Preparing original JPEGs and SHA-256 checksums…';
+  $('archive-status').textContent = '正在打包原片并计算 SHA-256…';
   try {
     const archive = await GRTransferFiles.buildArchive(entries, { signal, onProgress: (done, total) => {
-      if (generation === state.generation) $('archive-status').textContent = `Checked ${done} of ${total} JPEGs…`;
+      if (generation === state.generation) $('archive-status').textContent = `已校验 ${done} / ${total} 张原片…`;
     } });
     if (generation !== state.generation || signal.aborted) return;
     state.archive = { blob: archive.blob, objectUrl: URL.createObjectURL(archive.blob), filename: archive.filename, count: entries.length, entries };
-    $('archive-status').textContent = `${entries.length} original JPEGs ready in a ZIP with folders and SHA-256 manifest. Save ZIP, then check Downloads.`;
+    $('archive-status').textContent = `${entries.length} 张原片已打包，包含原文件夹和 SHA-256 清单。保存 ZIP 后请检查下载文件夹。`;
   } catch (error) {
-    if (generation === state.generation) $('archive-status').textContent = signal.aborted ? 'ZIP preparation cancelled. Your ready JPEGs are still available.' : `ZIP could not be prepared. ${error.message}`;
+    if (generation === state.generation) $('archive-status').textContent = signal.aborted ? '已取消打包，原片仍可单独保存。' : `打包失败。${userError(error)}`;
   } finally {
     if (generation === state.generation) { state.exporting = false; state.archiveController = null; renderQueue(); }
   }
@@ -853,8 +890,8 @@ function saveArchive() {
     handoffDownload(state.archive.blob, state.archive.filename);
     state.archive.entries.forEach(entry => { entry.archiveHandedOff = true; });
     updateUnloadGuard();
-    $('archive-status').textContent = `ZIP sent to browser (${state.archive.count} JPEGs). Check Downloads and the manifest; saving to disk is not verified here.`;
-  } catch (error) { $('archive-status').textContent = `The ZIP could not be handed to your browser. ${error.message}`; }
+    $('archive-status').textContent = `ZIP 已交给浏览器（${state.archive.count} 张原片）。请检查下载文件夹和校验清单，此处无法确认是否已写入磁盘。`;
+  } catch (error) { $('archive-status').textContent = `未能将 ZIP 交给浏览器。${userError(error)}`; }
 }
 
 $('try-demo').addEventListener('click', () => connect('demo'));
@@ -925,7 +962,7 @@ function suspendPage() {
   clearPreview();
   $('search').value = '';
   $('selected-only').checked = false;
-  $('folder').replaceChildren(new Option('All folders', ''));
+  $('folder').replaceChildren(new Option('全部文件夹', ''));
   $('notice').hidden = true;
   $('cancel-queue').disabled = false;
   setBusy(true);
@@ -948,8 +985,8 @@ async function reconcileSession(restored = false) {
     renderSession();
     if (restored) {
       notify(state.restoreClearedTray
-        ? 'This page was restored and its in-memory transfer tray was cleared. Transfer any unsaved files again. Check Downloads or Files for anything already handed to your browser.'
-        : 'Connection state refreshed after returning to this page.');
+        ? '返回页面后，临时传输记录已清空。尚未保存的照片需要重新传输；已交给浏览器的文件请到下载文件夹确认。'
+        : '返回页面后已更新连接状态。');
       state.restoreClearedTray = false;
     }
   } catch (error) {
@@ -960,7 +997,7 @@ async function reconcileSession(restored = false) {
     state.selected.clear();
     renderGallery();
     renderSession();
-    notify(`${restored ? 'The previous transfer tray was cleared. The connection could not be restored.' : 'The local bridge is unavailable.'} ${error.message}`, true);
+    notify(`${restored ? '之前的临时传输记录已清空，无法恢复连接。' : '本机程序暂不可用。'} ${userError(error)}`, true);
   } finally { if (generation === state.generation) setBusy(false); }
 }
 window.addEventListener('pagehide', suspendPage);

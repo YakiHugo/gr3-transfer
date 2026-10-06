@@ -1,0 +1,106 @@
+// Real Chromium UI/byte checks. Synthetic fixtures only; no camera address is contacted.
+import assert from 'node:assert/strict';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { once } from 'node:events';
+import { chromium } from 'playwright';
+import { createBridge } from '../src/server.js';
+import { AppError } from '../src/camera.js';
+
+const output = resolve(process.env.BROWSER_EVIDENCE_DIR || 'artifacts/browser');
+await mkdir(output, { recursive: true });
+let cameraAttempts = 0;
+const server = await createBridge({ adapter: { connect: async () => {
+  cameraAttempts++;
+  throw new AppError('Synthetic unreachable camera', 'CAMERA_UNREACHABLE', 503);
+} } });
+server.listen(0, '127.0.0.1'); await once(server, 'listening');
+const origin = `http://127.0.0.1:${server.address().port}`;
+const browser = await chromium.launch();
+const context = await browser.newContext({ viewport: { width: 1365, height: 960 }, locale: 'zh-CN', reducedMotion: 'reduce', acceptDownloads: true });
+const page = await context.newPage();
+const errors = [], unexpectedRequests = [], checks = [];
+page.on('pageerror', error => errors.push(error.message));
+await context.route('**/*', route => {
+  if (new URL(route.request().url()).origin !== origin) { unexpectedRequests.push(route.request().url()); return route.abort(); }
+  return route.continue();
+});
+const record = (label, condition = true) => { assert.ok(condition, label); checks.push(label); };
+const screenshot = async name => { await page.screenshot({ path: resolve(output, `${name}.png`), fullPage: true }); };
+const settled = async () => page.locator('#try-demo:not([disabled])').waitFor();
+const noOverflow = async () => record('viewport has no horizontal overflow', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+try {
+  await page.goto(origin); await settled();
+  record('Simplified Chinese document', await page.locator('html').getAttribute('lang') === 'zh-CN');
+  record('no camera read on startup', cameraAttempts === 0);
+  await noOverflow(); await screenshot('01-desktop-connect');
+  await page.locator('#landing-connect').click();
+  await page.getByRole('button', { name: '关闭连接说明' }).click();
+  record('connection instructions close without an attempt', cameraAttempts === 0 && !await page.locator('#connect-dialog').isVisible());
+  await page.locator('#landing-connect').click(); await page.locator('#confirm-connect').click();
+  await page.locator('#connect-error').waitFor({ state: 'visible' });
+  record('camera failure has Chinese recovery', (await page.locator('#connect-error').innerText()).includes('无法连接相机'));
+  await screenshot('02-connection-recovery');
+  await page.getByRole('button', { name: '关闭连接说明' }).click();
+  await page.locator('#try-demo').click(); await page.locator('#workspace').waitFor({ state: 'visible' });
+  await page.locator('.photo-card').last().waitFor();
+  record('demo has twelve synthetic cards', await page.locator('.photo-card').count() === 12);
+  record('secondary controls collapsed', await page.locator('.filter-options').getAttribute('open') === null && await page.locator('.card-diagnostics').getAttribute('open') === null);
+  await page.locator('.photo-image-button img').first().evaluate(image => image.decode());
+  await noOverflow(); await screenshot('03-desktop-photos');
+  await page.locator('.filter-options summary').click(); await page.locator('#folder').selectOption('100RICOH'); await page.locator('#sort').selectOption('name-asc'); await page.locator('.filter-options summary').click();
+  await page.locator('.photo-image-button').first().click();
+  const first = await page.locator('#preview-title').innerText();
+  await page.locator('#preview-next').click(); record('preview next changes photo', await page.locator('#preview-title').innerText() !== first);
+  await page.locator('#preview-previous').click(); record('preview previous restores photo', await page.locator('#preview-title').innerText() === first);
+  await page.locator('#preview-select').click(); await page.locator('.preview-close').click();
+  record('selection retained after preview closes', await page.locator('#selection-count').innerText() === '1');
+  await page.locator('#transfer').click(); await page.locator('.queue-item[data-state="ready"]').waitFor();
+  record('file checksum details start collapsed', await page.locator('.file-verification').getAttribute('open') === null);
+  await screenshot('04-desktop-ready');
+  const downloaded = page.waitForEvent('download'); await page.locator('.queue-item-top button').click(); const download = await downloaded;
+  const actual = await readFile(await download.path());
+  const manifest = JSON.parse(await readFile(new URL('../fixtures/manifest.json', import.meta.url)));
+  const photo = manifest.find(p => p.folder === '100RICOH' && p.name === first);
+  assert.deepEqual(actual, await readFile(new URL(`../fixtures/${photo.id}.jpg`, import.meta.url))); record('downloaded JPEG matches fixture byte for byte');
+  record('save reports browser handoff honestly', (await page.locator('.queue-item-status').innerText()).includes('请检查下载文件夹'));
+  await page.locator('#disconnect').click(); await page.locator('#offline-transfers').waitFor({ state: 'visible' });
+  record('disconnect retains original', await page.locator('.queue-item[data-state="handed-off"]').count() === 1);
+  await page.locator('#clear-queue').click(); await settled();
+  // Mobile-width layout is a desktop browser viewport, not a phone networking claim.
+  await page.setViewportSize({ width: 390, height: 844 }); await noOverflow(); await screenshot('05-mobile-connect');
+  await page.locator('#try-demo').click(); await page.locator('#workspace').waitFor({ state: 'visible' });
+  await page.locator('.photo-image-button img').first().evaluate(image => image.decode());
+  await noOverflow(); await screenshot('06-mobile-photos');
+  await page.locator('.photo-select input').first().check();
+  record('mobile selected action visible', await page.locator('#mobile-selection').isVisible());
+  // Hold one original request until Cancel; cancelled transport must never publish a ready file.
+  let enteredResolve, releaseResolve;
+  const entered = new Promise(resolve => { enteredResolve = resolve; });
+  const release = new Promise(resolve => { releaseResolve = resolve; });
+  const held = async route => { enteredResolve(); await release; await route.abort('aborted').catch(() => {}); };
+  await page.route('**/api/photos/*/original?*', held);
+  await page.locator('#mobile-transfer').click(); await entered;
+  await page.locator('#cancel-queue').click(); releaseResolve();
+  await page.locator('.queue-item[data-state="cancelled"]').waitFor();
+  record('cancel has no ready original', await page.locator('.queue-item[data-state="ready"]').count() === 0);
+  await page.unroute('**/api/photos/*/original?*', held);
+  await page.locator('#retry-unfinished').click(); await page.locator('.queue-item[data-state="ready"]').waitFor();
+  record('explicit retry recovers original', true);
+  await screenshot('07-mobile-ready');
+  page.once('dialog', dialog => dialog.dismiss()); await page.locator('#clear-queue').click();
+  record('declining discard keeps original', await page.locator('.queue-item[data-state="ready"]').count() === 1);
+  page.once('dialog', dialog => dialog.accept()); await page.locator('#clear-queue').click();
+  record('confirmed discard removes temporary original', await page.locator('.queue-item').count() === 0);
+  record('no uncaught browser errors', errors.length === 0);
+  record('no external requests', unexpectedRequests.length === 0);
+  record('camera only attempted explicitly through synthetic adapter', cameraAttempts === 1);
+  await writeFile(resolve(output, 'verification.json'), JSON.stringify({ status: 'passed', checks, cameraHardwareTested: false, browser: await browser.version(), screenshots: 7 }, null, 2));
+  console.log(`PASS ${checks.length} real Chromium checks; synthetic fixtures only`);
+} catch (error) {
+  await writeFile(resolve(output, 'verification.json'), JSON.stringify({ status: 'failed', checks, errors, unexpectedRequests, error: error.message }, null, 2));
+  await page.screenshot({ path: resolve(output, 'failure.png'), fullPage: true }).catch(() => {});
+  throw error;
+} finally {
+  await browser.close(); server.closeAllConnections(); server.close();
+}

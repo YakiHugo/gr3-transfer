@@ -9,3 +9,13 @@ test-results/
 coverage/
 .agents/
 .codex/
+
+dist/
+node-runtime-LICENSE
+android/.gradle/
+android/**/build/
+android/local.properties
+*.keystore
+*.jks
+
+artifacts/

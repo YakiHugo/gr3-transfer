@@ -240,3 +240,24 @@ test('format diagnostics never expose excluded RAW names or untrusted camera pro
   assert.doesNotMatch(text, /PRIVATE|SECRET|script/);
   assert.equal(JSON.parse(text).summary.raw, 1);
 });
+
+test('connection diagnostics identify identity versus listing failure without leaking camera data', async t => {
+  let failIdentity = true;
+  const adapter = new CameraAdapter({ fetchImpl: async url => {
+    if (url.endsWith('/props') && !failIdentity) return data({ model: 'RICOH GR III', key: 'PRIVATE' });
+    throw new TypeError('PRIVATE_NETWORK_DETAILS');
+  } });
+  const { post } = await bridge(t, adapter);
+  const identity = await (await post('connect', { mode: 'camera' })).json();
+  assert.equal(identity.cameraStage, 'identity');
+  failIdentity = false;
+  const listing = await (await post('connect', { mode: 'camera' })).json();
+  assert.equal(listing.cameraStage, 'listing');
+  assert.equal(listing.code, 'CAMERA_UNREACHABLE');
+  assert.doesNotMatch(JSON.stringify([identity, listing]), /PRIVATE/);
+});
+
+test('JSON body timeout remains a timeout rather than an unsupported firmware diagnosis', async () => {
+  const adapter = new CameraAdapter({ fetchImpl: async () => new Response(new ReadableStream({ start(controller) { controller.error(new DOMException('private detail', 'TimeoutError')); } })) });
+  await assert.rejects(adapter.connect(), error => error.code === 'CAMERA_TIMEOUT' && error.status === 504 && error.cameraStage === 'identity' && !error.message.includes('private'));
+});

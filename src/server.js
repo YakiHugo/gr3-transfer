@@ -202,6 +202,7 @@ export async function createBridge({ adapter = new CameraAdapter(), fixtureRoot 
       json(res, expected ? error.status : cancelled ? 409 : 500, {
         error: expected ? error.message : cancelled ? 'The previous operation was cancelled.' : 'The local bridge could not finish that request. Retry or restart it.',
         code: expected ? error.code : cancelled ? 'CANCELLED' : 'INTERNAL_ERROR',
+        ...(expected && ['identity', 'listing'].includes(error.cameraStage) ? { cameraStage: error.cameraStage } : {}),
       });
     }
   });
@@ -213,8 +214,8 @@ export async function createBridge({ adapter = new CameraAdapter(), fixtureRoot 
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT || 4317);
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('PORT must be an integer between 1024 and 65535.');
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('PORT 必须是 1024 到 65535 之间的整数。');
   const server = await createBridge();
-  server.on('error', error => { console.error(error.code === 'EADDRINUSE' ? `Port ${port} is already in use. Set PORT to another local port.` : 'Could not start the local bridge.'); process.exitCode = 1; });
-  server.listen(port, '127.0.0.1', () => console.log(`GR III Transfer · http://127.0.0.1:${port}\nLoopback only · disconnected · no camera requests until Connect GR III`));
+  server.on('error', error => { console.error(error.code === 'EADDRINUSE' ? `端口 ${port} 已被占用，请将 PORT 设置为其他本机端口。` : '本机程序无法启动。'); process.exitCode = 1; });
+  server.listen(port, '127.0.0.1', () => console.log(`GR Relay · http://127.0.0.1:${port}\n仅供本机使用 · 未连接 · 点击「连接相机」前不会访问相机`));
 }

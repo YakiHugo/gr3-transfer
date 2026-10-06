@@ -1,0 +1,32 @@
+name: Verify Chinese browser UI
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  chinese-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install the pinned Chromium runtime
+        run: npx playwright install --with-deps chromium
+      - name: Test Chinese UI, interruption and original download bytes
+        run: npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chinese-browser-evidence
+          path: artifacts/browser
+          if-no-files-found: error
+          retention-days: 7

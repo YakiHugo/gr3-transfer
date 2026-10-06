@@ -135,3 +135,61 @@ JPEG+RAW cards, duplicate entries, same names in different folders, refresh,
 source switching, and excluded-name/property privacy. Listing diagnostics
 perform no original, thumbnail or RAW reads. Hardware, Mac and Android
 acceptance remain pending; these tests do not establish a real transfer.
+
+## Portable desktop runtime, October 5, 2026
+
+The Linux/x64 runtime-included archive was built locally with Node 24.19.0 and
+successfully extracted into a temporary path with spaces, launched through its
+executable `.command` entry point, and stopped. Disconnected state, local page,
+12-frame synthetic demo, and original fixture byte equality were checked from
+the extracted bundle. This validates packaging mechanics only. macOS Intel and
+Apple Silicon workflow results must be checked before sharing their artifacts;
+manual macOS launch/security behavior, hardware transfers and downloads remain
+unverified. No signed/notarized installer or native phone app is represented by
+this desktop bundle.
+
+## Connection stage diagnostics, October 5, 2026
+
+Connection failures now distinguish an unverified camera identity from a GR III
+that answered its identity check but failed to return a usable photo listing.
+Only the fixed labels `identity`/`listing` cross the bridge; private response or
+network details do not. JSON-body timeouts now retain the timeout diagnosis
+instead of being reported as unfamiliar firmware. Three additional regressions
+cover stage projection, private-error redaction, streamed-body timeout, and the
+visible listing-failure explanation. Full synthetic suite: 125/125 passing.
+No additional camera endpoint, request, network setting or credential is used.
+
+Independent desktop review found that a long-running Linux browser opener could
+keep the bridge process alive after Control-C. The launcher now detaches and
+unreferences only its opener child, without killing or controlling the browser.
+A regression uses a controlled sleeping opener and verifies prompt bridge
+shutdown while that fixture stays alive. Full synthetic suite: 126/126 passing.
+
+## Chinese/simple UI revision (2026-10-06)
+
+- Desktop HTML, accessible names, dynamic statuses, confirmations, recovery and
+  packaging errors now use Simplified Chinese. Protocol status codes and file
+  formats remain unchanged.
+- A two-action connection page replaces the large marketing layout. Filters,
+  card diagnostics and per-file checksums are progressive disclosures; primary
+  selection/transfer/save controls remain visible.
+- `npm run check`: **129 tests passed**, including original-byte/security tests
+  and new Chinese UI, collapsed-detail and localized-error contracts.
+- A 50,000-frame synthetic filter/sort benchmark still reuses the derived list.
+- Real-browser screenshot/runtime validation is a separate pinned Playwright
+  smoke job. The current local sandbox refuses Chromium's process-singleton
+  socket and the cloud browser refuses this local preview URL. No bypass or
+  network exposure was used. Local DOM tests are not visual verification.
+- `Verify Chinese browser UI` must pass on the final published commit before its
+  screenshots or browser checks can be claimed. It uses synthetic fixtures and
+  a fake camera adapter, saves/compares an actual downloaded JPEG, tests mobile
+  viewport overflow and interrupted/repeated actions, and records its evidence.
+- No physical camera, Mac or phone acceptance is added by this revision.
+
+- Fresh `npm ci --ignore-scripts` from the final lockfile succeeded, and all 129
+  desktop checks passed against that clean dependency install.
+- The Chinese Linux/x64 portable bundle passed extracted startup, disconnected
+  session, demo listing and exact original-byte smoke checks using the included
+  Node v24.19.0 runtime. The runtime bytes and official LICENSE were matched to
+  the previously validated same-version bundle before reuse. This is not a Mac
+  or visual-browser result.
