@@ -124,6 +124,16 @@ public final class CoreTests {
         check(GalleryRules.filter(gallery,"","101").isEmpty(),"folder filter does not match prefixes");
         check(GalleryRules.filter(gallery,"","missing").isEmpty(),"unknown folder never broadens results");
         check(GalleryRules.folders(List.of()).isEmpty(),"empty inventory folder counts");
+        check(GalleryRules.sort(gallery,GalleryRules.SortOrder.NAME_ASC).equals(List.of(gallery.get(2),gallery.get(0),gallery.get(1))),"natural filename order puts R2 before R10");
+        check(GalleryRules.sort(gallery,GalleryRules.SortOrder.NAME_DESC).equals(List.of(gallery.get(1),gallery.get(0),gallery.get(2))),"descending filename order");
+        check(GalleryRules.sort(gallery,GalleryRules.SortOrder.CAMERA).equals(gallery),"camera sort retains supplied order");
+        check(GalleryRules.sort(gallery,GalleryRules.SortOrder.FOLDER_ASC).equals(List.of(gallery.get(0),gallery.get(2),gallery.get(1))),"folder sort uses filename as tie breaker");
+        check(GalleryRules.naturalCompare("R9999999999999999999999.JPG","R10000000000000000000000.JPG")<0,"natural sort handles digit runs beyond long range");
+        check(GalleryRules.naturalCompare("R2.JPG","R02.JPG")<0&&GalleryRules.naturalCompare("r2.JPG","R2.jpg")==0,"natural sort zero padding and case handling");
+        check(GalleryRules.SortOrder.restore("bogus")==GalleryRules.SortOrder.CAMERA&&GalleryRules.SortOrder.restore(null)==GalleryRules.SortOrder.CAMERA,"invalid restored sort falls back safely");
+        List<CameraRules.Photo> tied=List.of(new CameraRules.Photo("101RICOH","R1.JPG"),new CameraRules.Photo("100RICOH","R1.JPG"));
+        check(GalleryRules.sort(tied,GalleryRules.SortOrder.NAME_ASC).get(0).folder.equals("100RICOH"),"same filename sorts deterministically by folder");
+        check(gallery.get(0).name.equals("R2.JPG"),"sorting never mutates source inventory");
         System.out.println("PASS "+tests+" native Android core assertions; no camera/network/device contacted");
     }
 }
