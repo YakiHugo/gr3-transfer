@@ -1009,3 +1009,25 @@ test('DOM: JPEG plus RAW cards disclose that only JPEG is transferred', async t 
   assert.match(h.$('.photo-raw').textContent, /仅传 JPEG/); h.click('.photo-image-button');
   assert.equal(h.$('#preview-raw').hidden, false); assert.match(h.$('#preview-raw').textContent, /DNG.*RAW 请使用读卡器/);
 });
+
+
+test('DOM: graceful pause finishes the active JPEG, leaves unstarted entries, and resumes once', async t => {
+  let reads = 0, finish;
+  const h = await harness(t, {intercept: async (url) => {
+    if (url.pathname.endsWith('/original') && ++reads === 1) return new Response(new ReadableStream({start(c) { finish = () => { c.enqueue(original); c.close(); }; }}), {headers:{'Content-Type':'image/jpeg','X-File-Size':original.length}});
+  }});
+  await h.demo(); h.click('#select-visible'); h.click('#transfer'); await until(() => Boolean(finish));
+  h.click('#pause-queue'); finish(); await until(() => !h.$('#resume-queue').hidden);
+  assert.equal(reads, 1); assert.equal(h.all('.queue-item[data-state="ready"]').length, 1);
+  assert.equal(h.all('.queue-item[data-state="queued"]').length, 11);
+  h.click('#resume-queue'); h.click('#resume-queue');
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 12); assert.equal(reads, 12);
+});
+
+test('DOM: a paused batch can be cancelled without dropping its completed original', async t => {
+  let finish; const h = await harness(t, {intercept: async url => url.pathname.endsWith('/original') ? new Response(new ReadableStream({start(c){finish=()=>{c.enqueue(original);c.close();};}}), {headers:{'Content-Type':'image/jpeg'}}) : undefined});
+  await h.demo(); h.click('#select-visible'); h.click('#transfer'); await until(() => Boolean(finish));
+  h.click('#pause-queue'); finish(); await until(() => !h.$('#resume-queue').hidden);
+  h.click('#cancel-queue'); assert.equal(h.all('.queue-item[data-state="cancelled"]').length, 11);
+  assert.equal(h.all('.queue-item[data-state="ready"]').length, 1); assert.equal(h.$('#resume-queue').hidden, true);
+});

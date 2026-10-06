@@ -8,7 +8,7 @@ const QUEUE_LIMIT = 48;
 const MAX_ATTEMPTS = 3;
 const DOWNLOAD_GRACE_MS = 30000;
 const DOWNLOAD_LEASE_LIMIT = MEMORY_LIMIT + 1024 * 1024;
-const state = { session: null, photos: [], selected: new Set(), page: 1, busy: true, connecting: false, generation: 0, queue: [], running: false, controller: null, previewId: null, retained: 0, requestController: new AbortController(), restoreClearedTray: false, verifying: false, receiptController: null, exporting: false, archive: null, archiveController: null, downloadLeases: new Map(), leasedBytes: 0 };
+const state = { session: null, photos: [], selected: new Set(), page: 1, busy: true, connecting: false, generation: 0, queue: [], running: false, pauseRequested: false, controller: null, previewId: null, retained: 0, requestController: new AbortController(), restoreClearedTray: false, verifying: false, receiptController: null, exporting: false, archive: null, archiveController: null, downloadLeases: new Map(), leasedBytes: 0 };
 let entryId = 0;
 let unloadGuardActive = false;
 // Reuse locale collation and one derived list, rather than sorting the whole card
@@ -126,7 +126,11 @@ function updateControls() {
   $('clear-handed').hidden = !state.queue.some(entry => entry.status === 'handed-off' || entry.archiveHandedOff);
   $('select-batch').disabled = blocked || !state.session?.connected;
   $('retry-unfinished').disabled = blocked || !state.queue.some(canRetry);
-  $('cancel-queue').hidden = !state.running;
+  $('pause-queue').hidden = !state.running;
+  $('pause-queue').textContent = state.pauseRequested ? '取消暂停' : '本张完成后暂停';
+  $('resume-queue').hidden = state.running || !state.queue.some(entry => entry.status === 'queued' && currentSource(entry));
+  $('resume-queue').disabled = blocked;
+  $('cancel-queue').hidden = !state.running && !state.queue.some(entry => entry.status === 'queued');
   $('clear-queue').hidden = state.running;
   $('cancel-connect').hidden = !state.connecting;
   $('confirm-connect').textContent = state.busy && $('connect-dialog').open ? '正在连接…' : '连接相机';
@@ -648,6 +652,7 @@ function itemStatus(entry) {
   return entry.error || '传输失败 · 未保存文件';
 }
 function renderQueue() {
+  if (!state.running) state.queue.filter(entry => entry.status === 'queued' && !currentSource(entry)).forEach(entry => { entry.status = 'cancelled'; });
   $('queue-panel').hidden = state.queue.length === 0;
   $('queue-list').replaceChildren();
   state.queue.forEach(entry => {
@@ -720,7 +725,7 @@ function updateQueueSummary() {
   const failed = state.queue.filter(entry => entry.status === 'failed').length;
   const cancelled = state.queue.filter(entry => entry.status === 'cancelled').length;
   const waiting = state.queue.filter(entry => entry.status === 'queued').length;
-  const parts = [state.running && '正在逐张传输', ready && `${ready} 张待保存`, handed && `${handed} 张已交给浏览器`, waiting && `${waiting} 张等待中`, failed && `${failed} 张失败`, cancelled && `${cancelled} 张已取消`].filter(Boolean);
+  const parts = [state.running && (state.pauseRequested ? '本张完成后暂停' : '正在逐张传输'), !state.running && waiting && '已暂停，可继续传输', ready && `${ready} 张待保存`, handed && `${handed} 张已交给浏览器`, waiting && `${waiting} 张等待中`, failed && `${failed} 张失败`, cancelled && `${cancelled} 张已取消`].filter(Boolean);
   $('queue-summary').textContent = parts.join(' · ') || '暂无传输';
 }
 function renderRecovery() {
@@ -830,14 +835,15 @@ async function runQueue() {
   if (state.running || state.busy || state.exporting || state.verifying) return;
   // A retry can add a ready file to a previously packaged partial batch.
   invalidateArchive();
-  state.running = true;
+  state.running = true; state.pauseRequested = false;
   const generation = state.generation;
   state.controller = new AbortController();
   const signal = state.controller.signal;
   renderQueue();
   try {
     for (const entry of state.queue) {
-      if (signal.aborted || generation !== state.generation) break;
+      if (signal.aborted || state.pauseRequested || generation !== state.generation) break;
+      if (!currentSource(entry)) { if (entry.status === 'queued') entry.status = 'cancelled'; continue; }
       if (entry.status === 'queued') {
         await transferEntry(entry, signal, generation);
         if (generation !== state.generation) break;
@@ -846,15 +852,18 @@ async function runQueue() {
     }
   } finally {
     if (generation === state.generation) {
-      state.queue.filter(entry => entry.status === 'queued').forEach(entry => { entry.status = 'cancelled'; });
+      if (!state.pauseRequested || signal.aborted) state.queue.filter(entry => entry.status === 'queued').forEach(entry => { entry.status = 'cancelled'; });
+      state.pauseRequested = false;
       state.running = false; state.controller = null; renderQueue();
     }
   }
 }
 function cancelQueue() {
-  if (!state.running) return;
+  if (!state.running && !state.queue.some(entry => entry.status === 'queued')) return;
+  state.pauseRequested = false;
   state.queue.filter(entry => entry.status === 'queued').forEach(entry => { entry.status = 'cancelled'; });
   state.controller?.abort();
+  if (!state.running) { renderQueue(); return; }
   $('cancel-queue').disabled = true;
   const generation = state.generation;
   setTimeout(() => { if (generation === state.generation) $('cancel-queue').disabled = false; }, 200);
@@ -956,6 +965,8 @@ $('preview-dialog').addEventListener('keydown', event => {
 $('preview-select').addEventListener('click', () => { if (state.previewId) toggleSelection(state.previewId); });
 $('transfer').addEventListener('click', addToQueue);
 $('mobile-transfer').addEventListener('click', () => { addToQueue(); if (state.queue.length) $('queue-panel').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' }); });
+$('pause-queue').addEventListener('click', () => { if (state.running) { state.pauseRequested = !state.pauseRequested; updateControls(); updateQueueSummary(); } });
+$('resume-queue').addEventListener('click', () => { if (state.session?.connected) runQueue(); });
 $('cancel-queue').addEventListener('click', cancelQueue);
 $('clear-queue').addEventListener('click', clearQueue);
 $('clear-handed').addEventListener('click', clearHandedOff);
