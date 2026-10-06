@@ -134,6 +134,13 @@ public final class CoreTests {
         List<CameraRules.Photo> tied=List.of(new CameraRules.Photo("101RICOH","R1.JPG"),new CameraRules.Photo("100RICOH","R1.JPG"));
         check(GalleryRules.sort(tied,GalleryRules.SortOrder.NAME_ASC).get(0).folder.equals("100RICOH"),"same filename sorts deterministically by folder");
         check(gallery.get(0).name.equals("R2.JPG"),"sorting never mutates source inventory");
+        Set<String> selectedGallery=new LinkedHashSet<>(List.of(gallery.get(1).key()));
+        check(GalleryRules.selected(gallery,selectedGallery,true).equals(List.of(gallery.get(1))),"selected-only gallery shows exact selected source keys");
+        check(GalleryRules.selected(gallery,selectedGallery,false).equals(gallery),"leaving selected-only view restores all matches");
+        check(GalleryRules.selected(gallery,Set.of(),true).isEmpty(),"selected-only empty selection");
+        check(GalleryRules.selectedCount(gallery,selectedGallery)==1&&GalleryRules.selectedCount(List.of(gallery.get(0)),selectedGallery)==0,"selection counts identify hidden selected photos");
+        check(GalleryRules.selected(tied,Set.of(tied.get(0).key()),true).equals(List.of(tied.get(0))),"selected-only distinguishes same filenames in separate folders");
+        check(selectedGallery.size()==1&&gallery.size()==3,"selected-only filter leaves selection and inventory untouched");
         System.out.println("PASS "+tests+" native Android core assertions; no camera/network/device contacted");
     }
 }

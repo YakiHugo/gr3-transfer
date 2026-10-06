@@ -49,6 +49,14 @@ public final class GalleryRules {
         for (CameraRules.Photo photo : photos) if ((folder == null || folder.isEmpty() || folder.equals(photo.folder)) && (needle.isEmpty() || photo.key().toLowerCase(Locale.ROOT).contains(needle))) result.add(photo);
         return result;
     }
+    public static List<CameraRules.Photo> selected(List<CameraRules.Photo> photos, Set<String> keys, boolean onlySelected) {
+        List<CameraRules.Photo> result = new ArrayList<>();
+        for (CameraRules.Photo photo : photos) if (!onlySelected || keys.contains(photo.key())) result.add(photo);
+        return result;
+    }
+    public static int selectedCount(List<CameraRules.Photo> photos, Set<String> keys) {
+        int count = 0; for (CameraRules.Photo photo : photos) if (keys.contains(photo.key())) count++; return count;
+    }
     public static Map<String,Integer> folders(List<CameraRules.Photo> photos) {
         Map<String,Integer> counts = new TreeMap<>();
         for (CameraRules.Photo photo : photos) counts.put(photo.folder, counts.getOrDefault(photo.folder, 0) + 1);

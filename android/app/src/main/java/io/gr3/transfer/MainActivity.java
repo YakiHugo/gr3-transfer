@@ -20,13 +20,13 @@ public final class MainActivity extends Activity {
     private final Set<String> selected = new LinkedHashSet<>();
     private final Map<String,Bitmap> bitmapCache = new HashMap<>();
     private int page, renderGeneration;
-    private boolean trayTab;
+    private boolean trayTab, selectedOnly;
     private GalleryRules.SortOrder sortOrder = GalleryRules.SortOrder.CAMERA;
     private static final int PAGE_SIZE = 20;
     private static final int INK = Color.rgb(30,43,39), MUTED = Color.rgb(98,113,105), GREEN = Color.rgb(32,107,82), PAPER = Color.rgb(246,247,243);
     @Override public void onCreate(Bundle state) {
         super.onCreate(state); controller = ((TransferApplication)getApplication()).controller;
-        if (state != null) { sortOrder = GalleryRules.SortOrder.restore(state.getString("sort")); filterFolder = state.getString("folder", ""); searchQuery = state.getString("query", ""); page = state.getInt("page"); trayTab = state.getBoolean("tray"); selectionSession = state.getString("session", ""); ArrayList<String> saved = state.getStringArrayList("selected"); if (saved != null) selected.addAll(saved); }
+        if (state != null) { selectedOnly = state.getBoolean("selectedOnly"); sortOrder = GalleryRules.SortOrder.restore(state.getString("sort")); filterFolder = state.getString("folder", ""); searchQuery = state.getString("query", ""); page = state.getInt("page"); trayTab = state.getBoolean("tray"); selectionSession = state.getString("session", ""); ArrayList<String> saved = state.getStringArrayList("selected"); if (saved != null) selected.addAll(saved); }
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(PAPER); root.setPadding(dp(18), dp(12), dp(18), dp(10));
         if (Build.VERSION.SDK_INT >= 30) root.setOnApplyWindowInsetsListener((view, insets) -> {
             Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
@@ -47,7 +47,7 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onStart() { super.onStart(); controller.listen(this::render); render(); }
     @Override protected void onStop() { controller.listen(null); if (!isChangingConfigurations()) controller.cancel(); super.onStop(); }
-    @Override protected void onSaveInstanceState(Bundle out) { out.putString("sort",sortOrder.name()); out.putString("folder",filterFolder); out.putString("query",searchQuery); out.putInt("page",page); out.putBoolean("tray",trayTab); out.putString("session",selectionSession); out.putStringArrayList("selected",new ArrayList<>(selected)); super.onSaveInstanceState(out); }
+    @Override protected void onSaveInstanceState(Bundle out) { out.putBoolean("selectedOnly",selectedOnly); out.putString("sort",sortOrder.name()); out.putString("folder",filterFolder); out.putString("query",searchQuery); out.putInt("page",page); out.putBoolean("tray",trayTab); out.putString("session",selectionSession); out.putStringArrayList("selected",new ArrayList<>(selected)); super.onSaveInstanceState(out); }
     @android.annotation.SuppressLint("GestureBackNavigation")
     @Override public void onBackPressed() { leave(); }
     private void leave() {
@@ -63,7 +63,7 @@ public final class MainActivity extends Activity {
         int y = resetScroll ? 0 : scroll.getScrollY();
         int generation = ++renderGeneration;
         synchronized (controller) {
-            if (!selectionSession.equals(controller.session)) { selected.clear(); searchQuery = ""; filterFolder = ""; sortOrder = GalleryRules.SortOrder.CAMERA; page = 0; selectionSession = controller.session; bitmapCache.clear(); }
+            if (!selectionSession.equals(controller.session)) { selected.clear(); searchQuery = ""; filterFolder = ""; sortOrder = GalleryRules.SortOrder.CAMERA; selectedOnly = false; page = 0; selectionSession = controller.session; bitmapCache.clear(); }
             status.setText(controller.status);
             navigation.removeAllViews(); bottom.removeAllViews(); content.removeAllViews();
             boolean showTabs=controller.connected||!controller.entries().isEmpty(); navigation.setVisibility(showTabs?View.VISIBLE:View.GONE);
@@ -89,13 +89,16 @@ public final class MainActivity extends Activity {
             addButton(content,"使用与隐私说明",this::privacy,true);
             primary(bottom,"连接 GR III",()->controller.connect(false),!controller.busy); return;
         }
-        List<CameraRules.Photo> photos = GalleryRules.sort(GalleryRules.filter(controller.inventory.photos, searchQuery, filterFolder), sortOrder);
+        List<CameraRules.Photo> photos = GalleryRules.sort(GalleryRules.selected(GalleryRules.filter(controller.inventory.photos, searchQuery, filterFolder), selected, selectedOnly), sortOrder);
         int pages = Math.max(1,(photos.size()+PAGE_SIZE-1)/PAGE_SIZE); page = Math.min(page,pages-1);
         int start = page*PAGE_SIZE, end = Math.min(photos.size(),start+PAGE_SIZE);
         List<CameraRules.Photo> visible = new ArrayList<>(photos.subList(start,end));
         content.addView(text("选择照片",23,true));
-        content.addView(text(photos.size()+" 张 JPEG"+(controller.demo?" · 演示图片，单独保存":" · 原片不压缩")+(pages>1?" · 第 "+(page+1)+" / "+pages+" 页":""),12,false));
-        if(!searchQuery.isEmpty()||!filterFolder.isEmpty())content.addView(text((filterFolder.isEmpty()?"全部文件夹":filterFolder)+(searchQuery.isEmpty()?"":" · 搜索："+searchQuery)+" · 已筛选",12,false));
+        content.addView(text("显示 "+photos.size()+" / "+controller.inventory.photos.size()+" 张 JPEG · 已选 "+selected.size()+(controller.demo?" · 演示图片，单独保存":" · 原片不压缩")+(pages>1?" · 第 "+(page+1)+" / "+pages+" 页":""),12,false));
+        if(!searchQuery.isEmpty()||!filterFolder.isEmpty()||selectedOnly)content.addView(text((filterFolder.isEmpty()?"全部文件夹":filterFolder)+(searchQuery.isEmpty()?"":" · 搜索："+searchQuery)+(selectedOnly?" · 仅看已选":"")+" · 已筛选",12,false));
+        int hiddenSelected=selected.size()-GalleryRules.selectedCount(photos,selected);
+        if(hiddenSelected>0)content.addView(text("另有 "+hiddenSelected+" 张已选照片不在当前筛选中，导入时会一起处理。",12,false));
+        primary(bottom,selected.isEmpty()?"选择要导入的照片":"导入原片（"+selected.size()+"）",()->{controller.transfer(new LinkedHashSet<>(selected));trayTab=true;render(true);},!controller.busy&&!selected.isEmpty());
         if(photos.isEmpty()) {
             banner(!controller.inventory.photos.isEmpty()?"没有符合筛选条件的照片，请在「更多 → 筛选与排序」调整条件。":controller.inventory.raw>0?"未找到 JPEG 照片\n当前目录只有 RAW，请使用读卡器导入。":"相机中暂无可导入的 JPEG 照片");
             return;
@@ -125,7 +128,6 @@ public final class MainActivity extends Activity {
             } else content.addView(tile);
         }
         content.addView(text("预览仅供选片；导入时读取完整 JPEG 原片。",12,false));
-        primary(bottom,selected.isEmpty()?"选择要导入的照片":"导入原片（"+selected.size()+"）",()->{controller.transfer(new LinkedHashSet<>(selected));trayTab=true;render(true);},!controller.busy&&!selected.isEmpty());
     }
     private LinearLayout photoCard(CameraRules.Photo photo,int height) {
         LinearLayout tile=card(); byte[] thumbnail=controller.thumbnails.get(photo.key()); Bitmap bitmap=bitmapCache.get(photo.key());
@@ -155,10 +157,11 @@ public final class MainActivity extends Activity {
         ArrayList<String> labels=new ArrayList<>();labels.add("全部文件夹（"+controller.inventory.photos.size()+"）");
         Map<String,Integer> counts=GalleryRules.folders(controller.inventory.photos);for(int i=1;i<folders.size();i++)labels.add(folders.get(i)+"（"+counts.get(folders.get(i))+"）");
         fields.addView(text("文件夹",13,true));Spinner folder=new Spinner(this);folder.setContentDescription("按相机文件夹筛选");folder.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,labels));folder.setSelection(Math.max(0,folders.indexOf(filterFolder)));fields.addView(folder);
+        CheckBox onlySelected=new CheckBox(this);onlySelected.setText("仅看已选照片");onlySelected.setChecked(selectedOnly);fields.addView(onlySelected);
         fields.addView(text("排序（不是拍摄时间）",13,true));Spinner order=new Spinner(this);order.setContentDescription("照片排序");order.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"相机列表顺序","文件名：从小到大","文件名：从大到小","文件夹：从小到大"}));order.setSelection(sortOrder.ordinal());fields.addView(order);
         new AlertDialog.Builder(this).setTitle("筛选与排序").setView(fields)
-            .setNegativeButton("取消",null).setNeutralButton("清除筛选",(d,w)->{searchQuery="";filterFolder="";sortOrder=GalleryRules.SortOrder.CAMERA;page=0;render(true);})
-            .setPositiveButton("应用",(d,w)->{searchQuery=query.getText().toString().trim();filterFolder=folders.get(folder.getSelectedItemPosition());sortOrder=GalleryRules.SortOrder.values()[order.getSelectedItemPosition()];page=0;render(true);}).show();
+            .setNegativeButton("取消",null).setNeutralButton("清除筛选",(d,w)->{searchQuery="";filterFolder="";sortOrder=GalleryRules.SortOrder.CAMERA;selectedOnly=false;page=0;render(true);})
+            .setPositiveButton("应用",(d,w)->{searchQuery=query.getText().toString().trim();filterFolder=folders.get(folder.getSelectedItemPosition());sortOrder=GalleryRules.SortOrder.values()[order.getSelectedItemPosition()];selectedOnly=onlySelected.isChecked();page=0;render(true);}).show();
     }
     private void connectionOptions() {
         ArrayList<String> labels=new ArrayList<>();ArrayList<Runnable> actions=new ArrayList<>();
