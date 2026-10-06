@@ -1000,3 +1000,12 @@ test('DOM: bulk handoff cleanup requires disk confirmation and preserves unsaved
   assert.equal(h.blobs.size, 12, '11 unsaved originals plus active handoff lease');
   assert.equal(h.$('#clear-handed').hidden, true);
 });
+
+
+test('DOM: JPEG plus RAW cards disclose that only JPEG is transferred', async t => {
+  const adapter = new CameraAdapter({fetchImpl: async url => new Response(JSON.stringify(url.endsWith('/props') ? {model:'RICOH GR III'} : {dirs:[{name:'100RICOH', files:['R1.JPG','R1.DNG']}]}), {headers:{'Content-Type':'application/json'}})});
+  const h = await harness(t, {adapter}); h.click('#landing-connect'); h.click('#confirm-connect');
+  await until(() => h.all('.photo-card').length === 1 && !h.$('#refresh').disabled);
+  assert.match(h.$('.photo-raw').textContent, /仅传 JPEG/); h.click('.photo-image-button');
+  assert.equal(h.$('#preview-raw').hidden, false); assert.match(h.$('#preview-raw').textContent, /DNG.*RAW 请使用读卡器/);
+});

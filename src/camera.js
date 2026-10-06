@@ -21,6 +21,7 @@ export function parsePhotoInventory(data) {
   if (!data || !Array.isArray(data.dirs)) throw new AppError('The camera returned an unfamiliar photo list.', 'UNSUPPORTED_RESPONSE');
   const photos = new Map();
   const seen = new Set();
+  const rawPairs = new Map();
   const summary = { jpeg: 0, raw: 0, other: 0, duplicateEntries: 0 };
   for (const dir of data.dirs) {
     if (!dir || typeof dir.name !== 'string' || !SEGMENT.test(dir.name) || !Array.isArray(dir.files)) {
@@ -32,7 +33,15 @@ export function parsePhotoInventory(data) {
       if (seen.has(key)) { summary.duplicateEntries++; continue; }
       seen.add(key);
       if (!/\.jpe?g$/i.test(name)) {
-        if (/\.(?:dng|pef)$/i.test(name)) summary.raw++;
+        if (/\.(?:dng|pef)$/i.test(name)) {
+          summary.raw++;
+          const safeRaw = name.match(/^([A-Za-z0-9_-]{1,64})\.(dng|pef)$/i);
+          if (safeRaw) {
+            const stem = `${dir.name}\0${safeRaw[1].toLowerCase()}`;
+            if (!rawPairs.has(stem)) rawPairs.set(stem, new Set());
+            rawPairs.get(stem).add(safeRaw[2].toUpperCase());
+          }
+        }
         else summary.other++;
         continue; // RAW/video never silently converted to JPEG.
       }
@@ -41,6 +50,10 @@ export function parsePhotoInventory(data) {
       photos.set(id, { id, folder: dir.name, name, bytes: null, takenAt: null, width: null, height: null, synthetic: false });
       if (photos.size > 50000) throw new AppError('This card has more than 50,000 JPEGs. This prototype cannot list it safely.', 'LIST_TOO_LARGE');
     }
+  }
+  for (const photo of photos.values()) {
+    const pair = rawPairs.get(`${photo.folder}\0${photo.name.replace(/\.jpe?g$/i, '').toLowerCase()}`);
+    if (pair) photo.rawCompanions = [...pair].sort();
   }
   summary.jpeg = photos.size;
   return { photos: [...photos.values()].sort((a, b) => b.folder.localeCompare(a.folder) || b.name.localeCompare(a.name)), summary };
