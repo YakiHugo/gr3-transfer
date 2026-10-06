@@ -296,8 +296,8 @@ run, and the hardware checklist remains open.
   RAW badges/details, declined/confirmed individual removal, selective retry,
   busy removal guards and mixed saved/unsaved cleanup with real MediaStore readback
 - `test-emulator.sh` now includes that phase and the existing native layout phase. The hosted Android workflow adds a
-  disposable API 29 software-emulator job, using official SDK tools, preaccepted
-  runner licenses, no KVM permission changes, and synthetic fixtures only. Logs
+  disposable API 29 emulator job, using official SDK tools, preaccepted
+  runner licenses, two virtual CPUs and synthetic fixtures only. Acceleration is used only when `/dev/kvm` is already readable/writable and the official probe succeeds; otherwise the software fallback remains. No KVM, group or host security permissions are changed. Logs
   and app screenshots are uploaded even on failure
 - **This batch has no local SDK or emulator available.** Core tests and source
   audits passed locally; new APK compilation, lint and runtime results must be

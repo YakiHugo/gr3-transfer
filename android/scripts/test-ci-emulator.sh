@@ -32,11 +32,20 @@ hw.lcd.width=320
 hw.lcd.height=640
 hw.lcd.density=160
 hw.ramSize=1536
+hw.cpu.ncore=2
 vm.heapSize=256
 hw.keyboard=yes
 AVD
-# Software CPU/GPU only: no host KVM/security permission changes.
-emulator -avd gr3-ci -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -accel off -gpu swiftshader_indirect -camera-back none -camera-front none > build/native-smoke/emulator.txt 2>&1 &
+# Use acceleration only when this runner already grants access and the official
+# probe confirms it is usable. Never change device/group/security permissions.
+acceleration=off
+if [[ -r /dev/kvm && -w /dev/kvm ]]; then
+  if emulator -accel-check > build/native-smoke/acceleration-check.txt 2>&1; then acceleration=on; fi
+else
+  printf 'KVM is not already readable and writable; using software fallback.\n' > build/native-smoke/acceleration-check.txt
+fi
+printf 'Emulator acceleration: %s; two virtual CPUs; no host permission changes.\n' "$acceleration" | tee build/native-smoke/acceleration-mode.txt
+emulator -avd gr3-ci -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -cores 2 -accel "$acceleration" -gpu swiftshader_indirect -camera-back none -camera-front none > build/native-smoke/emulator.txt 2>&1 &
 emulator_pid=$!
 deadline=$((SECONDS + 900))
 while [[ $(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') != 1 ]]; do
