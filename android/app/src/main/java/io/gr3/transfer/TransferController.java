@@ -24,7 +24,7 @@ final class TransferController {
     String session = "", status = "请先连接相机 Wi-Fi";
     boolean busy, connected, demo;
     CameraRules.Inventory inventory = new CameraRules.Inventory(new ArrayList<>(), 0, 0, 0);
-    final LinkedHashMap<String,byte[]> thumbnails = new LinkedHashMap<>();
+    final PreviewCache<byte[]> thumbnails = new PreviewCache<>();
     TransferController(Context context) {
         this.context = context.getApplicationContext();
         ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);
@@ -308,7 +308,7 @@ final class TransferController {
         synchronized (this) {
             if (busy || !connected) return;
             operation = begin("正在加载本页预览…"); sourceSession = session; source = network; synthetic = demo;
-            thumbnails.clear();
+            if(page.size()>1)thumbnails.clear();
         }
         worker.execute(() -> {
             int loaded = 0;

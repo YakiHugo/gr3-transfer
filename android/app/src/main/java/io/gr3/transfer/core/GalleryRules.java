@@ -83,6 +83,8 @@ public final class GalleryRules {
         }
         return new SelectionChange(result,omitted);
     }
+    public static int previewIndex(List<CameraRules.Photo> photos,String key){for(int i=0;i<photos.size();i++)if(photos.get(i).key().equals(key))return i;return -1;}
+    public static CameraRules.Photo previewNeighbor(List<CameraRules.Photo> photos,String key,int direction){if(direction!=-1&&direction!=1)return null;int current=previewIndex(photos,key),next=current+direction;return current<0||next<0||next>=photos.size()?null:photos.get(next);}
     public static Map<String,Integer> folders(List<CameraRules.Photo> photos) {
         Map<String,Integer> counts = new TreeMap<>();
         for (CameraRules.Photo photo : photos) counts.put(photo.folder, counts.getOrDefault(photo.folder, 0) + 1);
