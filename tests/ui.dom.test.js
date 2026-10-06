@@ -946,3 +946,15 @@ test('DOM: camera failure codes and unexpected transport errors never leak raw E
   assert.match(h.window.eval(`${errorSource}\ncameraErrorMessage("INCOMPLETE_JPEG")`), /文件不完整/);
   assert.match(h.window.eval(`${errorSource}\ncameraErrorMessage("INVALID_CSRF")`), /先保存原片/);
 });
+
+
+test('DOM: invert page respects folder filters and leaves off-page selections intact', async t => {
+  const h = await harness(t); await h.demo();
+  h.change('#folder', '100RICOH'); h.click('#select-visible');
+  h.change('#folder', '101RICOH'); h.click('.photo-select input');
+  h.click('#invert-visible'); assert.equal(h.$('#selection-count').textContent, '11');
+  h.click('#invert-visible'); assert.equal(h.$('#selection-count').textContent, '7');
+  h.$('#selected-only').checked = true; h.$('#selected-only').dispatchEvent(new h.window.Event('change'));
+  h.click('#invert-visible'); assert.equal(h.$('#selection-count').textContent, '6');
+  assert.equal(h.all('.photo-card').length, 0);
+});

@@ -372,6 +372,7 @@ function renderSelection() {
   const visible = currentPage().visible;
   const visibleSelected = visible.filter(photo => state.selected.has(photo.id)).length;
   $('select-visible').disabled = !visible.length;
+  $('invert-visible').disabled = !visible.length;
   $('deselect-visible').disabled = !visibleSelected;
   $('selection-visibility').textContent = chosen.length ? `本页已选 ${visibleSelected} 张 · 其他页 ${chosen.length - visibleSelected} 张` : '尚未选择照片';
   for (const card of $('gallery').children) {
@@ -904,6 +905,7 @@ $('refresh').addEventListener('click', refresh);
 $('dismiss-notice').addEventListener('click', () => { $('notice').hidden = true; });
 for (const id of ['search', 'folder', 'sort']) $(id).addEventListener(id === 'search' ? 'input' : 'change', () => { state.page = 1; renderGallery(); });
 $('select-visible').addEventListener('click', () => { currentPage().visible.forEach(photo => state.selected.add(photo.id)); renderSelection(); });
+$('invert-visible').addEventListener('click', () => { const visible = currentPage().visible; visible.forEach(photo => { if (state.selected.has(photo.id)) state.selected.delete(photo.id); else state.selected.add(photo.id); }); if ($('selected-only').checked) renderGallery(); else renderSelection(); });
 $('clear-selection').addEventListener('click', () => { state.selected.clear(); if ($('selected-only').checked) renderGallery(); else renderSelection(); });
 $('selected-only').addEventListener('change', () => { state.page = 1; renderGallery(); });
 $('deselect-visible').addEventListener('click', () => { currentPage().visible.forEach(photo => state.selected.delete(photo.id)); if ($('selected-only').checked) renderGallery(); else renderSelection(); });
