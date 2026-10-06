@@ -225,6 +225,8 @@ public final class MainActivity extends Activity {
                 if(entry.status==TransferTray.Status.TRANSFERRING)item.addView(text(size(entry.bytes)+(entry.expected>=0?" / "+size(entry.expected):" · 总大小未知"),12,false));
             }
             LinearLayout actions=row();item.addView(actions);addButton(actions,"详情",()->entryDetails(entry),true);
+            if(entry.retryable(controller.session)&&controller.connected)addButton(actions,"重试这张",()->controller.retry(entry.key),!controller.busy);
+            if((entry.status==TransferTray.Status.FAILED||entry.status==TransferTray.Status.CANCELLED)&&entry.attempts>=3)item.addView(text("已达到 3 次尝试上限，请检查连接并重新选片。",12,false));
             if(entry.savedUri!=null)addButton(actions,"查看照片",()->openSaved(entry),!controller.busy);
             if((entry.status==TransferTray.Status.FAILED||entry.status==TransferTray.Status.CANCELLED)&&!entry.session.equals(controller.session))item.addView(text("这是之前连接的照片。请重新连接相机，再次选择该文件。",13,false));
         }

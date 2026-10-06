@@ -36,6 +36,12 @@ public final class TransferTray {
         for (Entry e : entries.values()) if (e.retryable(session)) { e.status = Status.QUEUED; e.message = "等待重新导入"; eligible.add(e); }
         return eligible;
     }
+    public List<Entry> retry(String session, String key) {
+        Entry entry=entries.get(key);
+        if(entry==null||!entry.retryable(session))return Collections.emptyList();
+        entry.status=Status.QUEUED;entry.message="等待重新导入";
+        return Collections.singletonList(entry);
+    }
     /** Drops only confirmed saved records; never deletes a MediaStore URI. */
     public int clearSaved() {
         int removed=0;Iterator<Entry> iterator=entries.values().iterator();
