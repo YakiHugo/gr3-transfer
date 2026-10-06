@@ -53,6 +53,14 @@ public final class TransferTray {
         }
         return removed;
     }
+    public enum RemoveResult { REMOVED, NOT_FOUND, BUSY, UNSAVED, DELETE_FAILED }
+    public RemoveResult remove(String key, boolean discardUnsaved) {
+        Entry entry=entries.get(key);if(entry==null)return RemoveResult.NOT_FOUND;
+        if(entry.status==Status.QUEUED||entry.status==Status.TRANSFERRING||entry.status==Status.SAVING)return RemoveResult.BUSY;
+        if(entry.unsaved()&&!discardUnsaved)return RemoveResult.UNSAVED;
+        if(entry.file!=null&&entry.file.exists()&&!entry.file.delete())return RemoveResult.DELETE_FAILED;
+        entries.remove(key);return RemoveResult.REMOVED;
+    }
     public void clear() { for (Entry e : entries.values()) if (e.file != null) e.file.delete(); entries.clear(); }
     public boolean hasUnsaved() { for (Entry e : entries.values()) if (e.unsaved()) return true; return false; }
 }

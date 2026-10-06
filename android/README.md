@@ -176,6 +176,8 @@ end-to-end proof, compare a saved file with a card-reader copy.
 
 ## Cancellation, retry and lifecycle
 
+单张记录的「详情 → 移除记录」可以释放名额；未保存原片须明确确认，操作进行中不可移除。仅删除该条记录的应用临时副本，不删除相机或相册文件。
+
 Each eligible failed/cancelled card offers “重试这张”, alongside the existing batch retry, so one problem photo can be retried without restarting other failures. Both paths use the same session and three-attempt guards.
 
 Cancel preserves completed cache originals. Retry restarts a failed/cancelled
