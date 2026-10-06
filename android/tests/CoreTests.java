@@ -92,6 +92,15 @@ public final class CoreTests {
             rejects(()->PendingSave.save(store,()->new ByteArrayInputStream(MINIMAL),"original.jpg",false,minimal,new CancelToken()),"save failure "+failure);
             check(store.published==0&&store.rows.size()==1&&store.rows.get("existing-user-photo")[0]==7,"failed save removes only its pending row "+failure);
         }
+        FakeStore destinationFailure=new FakeStore();
+        rejects(()->PendingSave.save(destinationFailure,()->new ByteArrayInputStream(MINIMAL),"original.jpg",false,minimal,new CancelToken(),id->{
+            check(destinationFailure.journal.contains(id)&&destinationFailure.published==0,"durable destination callback occurs after pending journal and before publication");
+            throw new IOException("cannot persist destination");
+        }),"failed durable destination blocks publication");
+        check(destinationFailure.published==0&&destinationFailure.deleted==1&&destinationFailure.rows.size()==1,"destination journal failure discards only newly created pending row");
+        FakeStore durable=new FakeStore();final String[] durableId={null};
+        String durableSaved=PendingSave.save(durable,()->new ByteArrayInputStream(MINIMAL),"original.jpg",false,minimal,new CancelToken(),id->durableId[0]=id);
+        check(durableSaved.equals(durableId[0])&&durable.published==1,"successful publication retains exact precommitted destination identity");
         FakeStore corrupt=new FakeStore();corrupt.corrupt=true;
         rejects(()->PendingSave.save(corrupt,()->new ByteArrayInputStream(MINIMAL),"original.jpg",false,minimal,new CancelToken()),"readback corruption prevents publish");
         check(corrupt.published==0&&corrupt.deleted==1,"corrupt pending bytes deleted");

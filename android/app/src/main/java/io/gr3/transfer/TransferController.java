@@ -15,6 +15,8 @@ final class TransferController {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final TransferTray tray = new TransferTray();
     private final File staging;
+    private StagedOriginals recovery;
+    private boolean cleanupPending;
     private CancelToken token;
     private Network network;
     private Runnable listener;
@@ -27,17 +29,73 @@ final class TransferController {
         this.context = context.getApplicationContext();
         ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);
         transport = new CameraTransport(manager); saver = new MediaSaver(context);
-        staging = new File(context.getCacheDir(), "originals"); staging.mkdirs();
-        worker.execute(() -> { File[] files = staging.listFiles(); if (files != null) for (File file : files) file.delete(); saver.cleanInterrupted(); });
+        staging = new File(context.getNoBackupFilesDir(), "originals");
+        busy = true; status = "正在校验上次保留的原片…";
+        worker.execute(this::restoreOriginals);
         manager.registerNetworkCallback(new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), new ConnectivityManager.NetworkCallback() {
             @Override public void onLost(Network lost) { main.post(() -> lost(lost)); }
         });
     }
+    private void restoreOriginals() {
+        try {
+            // One-time cleanup of the former evictable cache, never traverse directories.
+            File[] legacy = new File(context.getCacheDir(), "originals").listFiles();
+            if (legacy != null) for (File file : legacy) if (!file.isDirectory()) file.delete();
+            saver.cleanInterrupted();
+            recovery = new StagedOriginals(staging);
+            StagedOriginals.Recovery restored = recovery.restore();
+            for (TransferTray.Entry entry : restored.entries) {
+                try { reconcileSave(entry); }
+                catch (IOException error) {
+                    entry.status = TransferTray.Status.SAVE_UNCONFIRMED;
+                    entry.message = "保存记录暂时无法更新。为避免重复照片，请重启应用后检查。";
+                }
+                synchronized (this) { tray.restore(entry); }
+            }
+            synchronized (this) {
+                status = restored.entries.isEmpty() ? "请先连接相机 Wi-Fi" : "已恢复 " + restored.entries.size() + " 条导入记录，未连接相机。待保存原片已重新校验。";
+                if (restored.rejected > 0) status += " 有 " + restored.rejected + " 条记录暂无法恢复，相关副本已隔离并计入应用空间。清空导入记录会询问是否一并删除。";
+            }
+        } catch (IOException error) {
+            synchronized (this) { recovery = null; status = "无法恢复应用内原片，请检查手机存储空间后重启应用。未自动连接相机。"; }
+        } finally { synchronized (this) { busy = false; } changed(); }
+    }
+    /** Returns true only when a recorded publication is verified at its exact destination. */
+    private boolean reconcileSave(TransferTray.Entry entry) throws IOException {
+        if (entry.pendingSaveUri == null) return false;
+        MediaSaver.SavedState state = saver.savedState(entry.pendingSaveUri, entry.receipt);
+        if (state == MediaSaver.SavedState.PUBLISHED) {
+            markSaved(entry, entry.pendingSaveUri); return true;
+        }
+        if (state == MediaSaver.SavedState.MISSING) {
+            recovery.resetSave(entry);
+            synchronized (this) {
+                entry.status = TransferTray.Status.READY;
+                entry.message = "上次保存未完成，已校验原片，可重新确认保存。";
+            }
+        } else {
+            synchronized (this) {
+                entry.status = TransferTray.Status.SAVE_UNCONFIRMED;
+                entry.message = "暂时无法确认上次保存结果，为避免重复照片已暂停保存。请保持相册存储可用后重启应用；原片仍保留。";
+            }
+        }
+        return false;
+    }
+    private void markSaved(TransferTray.Entry entry, String uri) {
+        synchronized (this) {
+            entry.savedUri = uri; entry.status = TransferTray.Status.SAVED; entry.message = "已保存到相册，原片校验通过";
+            try { if (!recovery.forget(entry)) { cleanupPending = true; entry.message += "；应用内副本将在重启后继续清理。"; } }
+            catch (IOException ignored) { entry.message += "；应用内副本将在后续清理。"; }
+        }
+    }
     synchronized void listen(Runnable listener) { this.listener = listener; }
     private void changed() { main.post(() -> { Runnable current; synchronized (this) { current = listener; } if (current != null) current.run(); }); }
     synchronized List<TransferTray.Entry> entries() { return tray.all(); }
-    synchronized boolean hasUnsaved() { return tray.hasUnsaved(); }
-    synchronized long stagedBytes() { return tray.stagedBytes(); }
+    synchronized boolean hasUnsaved() { return tray.hasUnsaved() || recovery != null && recovery.unavailableCount() > 0; }
+    synchronized long stagedBytes() {
+        try { return recovery == null ? tray.stagedBytes() : recovery.usage().bytes; }
+        catch (IOException error) { return CameraRules.MAX_STAGED_BYTES; }
+    }
     private synchronized void lost(Network lost) {
         if (!lost.equals(network)) return;
         if (token != null) token.cancel();
@@ -133,6 +191,7 @@ final class TransferController {
         List<TransferTray.Entry> batch; CancelToken operation;
         synchronized (this) {
             if (!connected || busy) return;
+            if (recovery == null) { status = "原片保留目录不可用，请重启应用后再试。"; changed(); return; }
             List<CameraRules.Photo> photos = new ArrayList<>();
             for (CameraRules.Photo photo : inventory.photos) if (selected.contains(photo.key())) photos.add(photo);
             try { batch = tray.admit(session, photos, demo); }
@@ -166,30 +225,33 @@ final class TransferController {
                     long maximum; Network source;
                     synchronized (this) {
                         if (!connected || !entry.session.equals(session)) throw new TransferException("照片来源已改变，请重新连接并再次选片。");
-                        maximum = Math.min(CameraRules.MAX_JPEG_BYTES, tray.availableBytes()); source = network;
+                        maximum = Math.min(CameraRules.MAX_JPEG_BYTES, Math.min(tray.availableBytes(), Math.max(0, CameraRules.MAX_STAGED_BYTES - stagedBytes()))); source = network;
                         entry.status = TransferTray.Status.TRANSFERRING; entry.attempts++; entry.bytes = 0; entry.expected = -1; entry.message = "正在读取完整原片";
                     }
                     changed(); operation.check();
                     if (maximum <= 0) throw new TransferException("临时空间已满（256 MiB）。请先保存已导入的原片，再重试。");
                     if (staging.getUsableSpace() < Math.min(maximum, 16L * 1024 * 1024)) throw new TransferException("手机存储空间不足，请先保存或清理临时原片，再重试。");
-                    file = File.createTempFile("original-", ".jpg", staging);
+                    if (recovery == null) throw new TransferException("原片保留目录不可用，请重启应用后再试。");
+                    file = recovery.createPart();
                     OriginalCopy.Receipt receipt;
                     OriginalCopy.Progress progress = (bytes, expected) -> {
                         synchronized (this) { entry.bytes = bytes; entry.expected = expected; }
                         long now = SystemClock.elapsedRealtime(); if (now - lastProgress > 180) { lastProgress = now; changed(); }
                     };
                     if (entry.demo) {
-                        try (InputStream in = context.getAssets().open(entry.photo.asset + ".jpg"); OutputStream out = new FileOutputStream(file)) {
+                        try (InputStream in = context.getAssets().open(entry.photo.asset + ".jpg"); OutputStream out = recovery.openPart(file)) {
                             receipt = OriginalCopy.copy(in, out, -1, maximum, operation, progress);
                         }
                     } else {
-                        try (CameraTransport.Response response = transport.get(source, entry.photo.originalPath(), maximum, operation); OutputStream out = new FileOutputStream(file)) {
+                        try (CameraTransport.Response response = transport.get(source, entry.photo.originalPath(), maximum, operation); OutputStream out = recovery.openPart(file)) {
                             receipt = OriginalCopy.copy(response.body, out, response.length, maximum, operation, progress);
                         }
                     }
                     operation.check();
+                    // Validation may read a large original; never hold the UI/controller monitor for it.
+                    recovery.complete(entry, file, receipt, entries());
                     synchronized (this) {
-                        operation.check(); entry.file = file; entry.receipt = receipt; entry.status = TransferTray.Status.READY; entry.message = "原片已导入，等待保存到相册"; ready++;
+                        entry.status = TransferTray.Status.READY; entry.message = "原片已保留在应用内，等待保存到相册"; ready++;
                     }
                     file = null;
                 } catch (Exception e) {
@@ -208,7 +270,7 @@ final class TransferController {
         List<TransferTray.Entry> batch = new ArrayList<>(); CancelToken operation;
         synchronized (this) {
             if (busy) return;
-            for (TransferTray.Entry entry : tray.all()) if (entry.status == TransferTray.Status.READY) batch.add(entry);
+            for (TransferTray.Entry entry : tray.all()) if (entry.status == TransferTray.Status.READY && entry.pendingSaveUri == null) batch.add(entry);
             if (batch.isEmpty()) return;
             operation = begin("正在保存到相册并校验原片…");
         }
@@ -219,14 +281,18 @@ final class TransferController {
                     if (operation.isCancelled()) break;
                     synchronized (this) { entry.status = TransferTray.Status.SAVING; entry.message = "正在写入临时照片"; } changed();
                     try {
-                        android.net.Uri uri = saver.save(entry.file, CameraRules.saveName(entry.session, entry.photo, entry.demo), entry.receipt, entry.demo, operation);
-                        synchronized (this) { entry.savedUri = uri.toString(); entry.status = TransferTray.Status.SAVED; entry.message = "已保存到相册，原片校验通过"; entry.file.delete(); entry.file = null; saved++; }
+                        android.net.Uri uri = saver.save(entry.file, CameraRules.saveName(entry.session, entry.photo, entry.demo), entry.receipt, entry.demo, operation, id -> recovery.rememberSave(entry, id));
+                        markSaved(entry, uri.toString()); saved++;
                     } catch (Exception e) {
-                        synchronized (this) {
+                        // A provider can fail after committing. Never blindly retry a destination whose result is unknown.
+                        if (entry.pendingSaveUri != null) {
+                            try { if (reconcileSave(entry)) saved++; }
+                            catch (IOException error) { synchronized (this) { entry.status = TransferTray.Status.SAVE_UNCONFIRMED; entry.message = "保存记录暂时无法更新。为避免重复照片，请重启应用后检查。"; } }
+                        } else synchronized (this) {
                             if (entry.file == null || !entry.file.isFile()) {
                                 entry.file = null; entry.receipt = null; entry.status = TransferTray.Status.FAILED;
-                                entry.message = "Android 已移除这张临时原片。请重新导入；重新连接后需再次选片。";
-                            } else { entry.status = TransferTray.Status.READY; entry.message = "保存未完成，临时原片已保留。" + message(e, operation); }
+                                entry.message = "应用内原片已不可用。请重新导入；重新连接后需再次选片。";
+                            } else { entry.status = TransferTray.Status.READY; entry.message = "保存未完成，应用内原片已保留。" + message(e, operation); }
                         }
                     }
                     changed();
@@ -264,17 +330,40 @@ final class TransferController {
         return bytes.toByteArray();
     }
     synchronized void clearSaved() {
-        if(busy)return;
-        int count=tray.clearSaved();status="已清理 "+count+" 条已保存记录，未保存原片和相册照片均保留。";changed();
+        if (busy) return;
+        int count = 0;
+        for (TransferTray.Entry entry : tray.all()) if (entry.status == TransferTray.Status.SAVED && entry.savedUri != null) {
+            if (removeDurably(entry.key, false) == TransferTray.RemoveResult.REMOVED) count++;
+        }
+        status = "已清理 " + count + " 条已保存记录，未保存原片和相册照片均保留。" + cleanupNotice(); changed();
+    }
+    private TransferTray.RemoveResult removeDurably(String key, boolean discardUnsaved) {
+        for (TransferTray.Entry entry : tray.all()) if (entry.key.equals(key)) {
+            if (entry.status == TransferTray.Status.QUEUED || entry.status == TransferTray.Status.TRANSFERRING || entry.status == TransferTray.Status.SAVING) return TransferTray.RemoveResult.BUSY;
+            if (entry.unsaved() && !discardUnsaved) return TransferTray.RemoveResult.UNSAVED;
+            try { if (entry.stagingId != null && !recovery.forget(entry)) cleanupPending = true; }
+            catch (IOException error) { return TransferTray.RemoveResult.DELETE_FAILED; }
+            return tray.remove(key, discardUnsaved);
+        }
+        return TransferTray.RemoveResult.NOT_FOUND;
     }
     synchronized TransferTray.RemoveResult remove(String key, boolean discardUnsaved) {
-        if(busy)return TransferTray.RemoveResult.BUSY;
-        TransferTray.RemoveResult result=tray.remove(key,discardUnsaved);
-        if(result==TransferTray.RemoveResult.REMOVED)status="这条导入记录已移除，相机文件和已保存的相册照片不受影响。";
-        else if(result==TransferTray.RemoveResult.DELETE_FAILED)status="临时副本暂时无法清理，记录已保留，请稍后重试。";
-        changed();return result;
+        if (busy) return TransferTray.RemoveResult.BUSY;
+        TransferTray.RemoveResult result = removeDurably(key, discardUnsaved);
+        if (result == TransferTray.RemoveResult.REMOVED) status = "这条导入记录已移除，相机文件和已保存的相册照片不受影响。" + cleanupNotice();
+        else if (result == TransferTray.RemoveResult.DELETE_FAILED) status = "应用内副本暂时无法清理，记录已保留，请稍后重试。";
+        changed(); return result;
     }
-    synchronized void clear() { if (busy) return; tray.clear(); status = "导入记录已清空，已保存的照片不受影响。"; changed(); }
+    synchronized void clear() {
+        if (busy) return;
+        for (TransferTray.Entry entry : tray.all()) removeDurably(entry.key, true);
+        boolean discarded = true;
+        try { if (recovery != null && !recovery.discardUnavailable()) cleanupPending = true; }
+        catch (IOException error) { discarded = false; }
+        status = tray.all().isEmpty() && discarded ? "导入记录已清空，已保存的照片不受影响。" + cleanupNotice() : "部分记录暂时无法清理，未清理的记录已保留，请稍后重试。";
+        changed();
+    }
+    private String cleanupNotice() { return cleanupPending ? " 部分应用内空间将在重启后继续释放；已移除记录不会恢复。" : ""; }
     private static String message(Exception error, CancelToken token) {
         if (token.isCancelled()) return "操作已取消，可重新连接或重试。";
         if (error instanceof TransferException) return error.getMessage();

@@ -1,9 +1,9 @@
 package io.gr3.transfer.core;
 import java.io.File;
 import java.util.*;
-/** A process-local tray. Every new connection has a fresh, non-camera-identifying session. */
+/** A tray with explicitly old-source restored entries. Every new connection has a fresh, non-camera-identifying session. */
 public final class TransferTray {
-    public enum Status { QUEUED, TRANSFERRING, READY, SAVING, SAVED, FAILED, CANCELLED }
+    public enum Status { QUEUED, TRANSFERRING, READY, SAVING, SAVED, SAVE_UNCONFIRMED, FAILED, CANCELLED }
     public static final class Entry {
         public final String key, session;
         public final CameraRules.Photo photo;
@@ -11,14 +11,19 @@ public final class TransferTray {
         public Status status = Status.QUEUED;
         public int attempts;
         public long bytes, expected = -1;
-        public String message = "等待导入", savedUri;
+        public String message = "等待导入", savedUri, stagingId, pendingSaveUri;
+        public boolean recovered;
         public OriginalCopy.Receipt receipt;
         public File file;
         Entry(String session, CameraRules.Photo photo, boolean demo) { this.session = session; this.photo = photo; this.demo = demo; key = session + ":" + photo.key(); }
-        public boolean retryable(String current) { return session.equals(current) && attempts < 3 && (status == Status.FAILED || status == Status.CANCELLED); }
+        public boolean retryable(String current) { return !recovered && pendingSaveUri == null && session.equals(current) && attempts < 3 && (status == Status.FAILED || status == Status.CANCELLED); }
         public boolean unsaved() { return receipt != null && savedUri == null; }
     }
     private final LinkedHashMap<String,Entry> entries = new LinkedHashMap<>();
+    public void restore(Entry entry) throws TransferException {
+        if (!entry.recovered || entries.size() >= CameraRules.MAX_ENTRIES || entries.containsKey(entry.key)) throw new TransferException("恢复记录无效。");
+        entries.put(entry.key, entry);
+    }
     public List<Entry> all() { return new ArrayList<>(entries.values()); }
     public List<Entry> admit(String session, Collection<CameraRules.Photo> photos, boolean demo) throws TransferException {
         if (!session.matches("[a-f0-9-]{36}")) throw new TransferException("请先重新连接相机，再导入照片。");
