@@ -214,13 +214,18 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
         android.app.Dialog dialog=previewDialog();android.graphics.Rect rect=new android.graphics.Rect();ZoomPreview[] image=new ZoomPreview[1];
         runOnMainSync(()->{image[0]=(ZoomPreview)firstImage(dialog.getWindow().getDecorView());check(image[0].getGlobalVisibleRect(rect),"gesture starts in visible preview");image[0].fit();});
         float x=rect.exactCenterX(),y=rect.exactCenterY();long down=SystemClock.uptimeMillis();
-        injectPreviewTouch(down,android.view.MotionEvent.ACTION_DOWN,new int[]{0},new float[]{x-30},new float[]{y});
-        injectPreviewTouch(down,android.view.MotionEvent.ACTION_POINTER_DOWN|(1<<android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT),new int[]{0,1},new float[]{x-30,x+30},new float[]{y,y});
-        injectPreviewTouch(down,android.view.MotionEvent.ACTION_MOVE,new int[]{0,1},new float[]{x-50,x+50},new float[]{y,y});
-        injectPreviewTouch(down,android.view.MotionEvent.ACTION_MOVE,new int[]{0,1},new float[]{x-70,x+70},new float[]{y,y});
-        injectPreviewTouch(down,android.view.MotionEvent.ACTION_POINTER_UP|(lifted<<android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT),new int[]{0,1},new float[]{x-70,x+70},new float[]{y,y});
+        float minimum=android.view.ViewConfiguration.get(activity).getScaledMinimumScalingSpan(),maximum=rect.width()-24;
+        check(maximum>minimum+32,"viewport supports a real pinch above platform minimum: "+minimum+"px in "+rect.width()+"px");
+        float initial=Math.max(20,Math.min(60,minimum/2)),first=minimum+(maximum-minimum)/3,second=minimum+2*(maximum-minimum)/3;
+        check(first-initial>2*android.view.ViewConfiguration.get(activity).getScaledTouchSlop(),"pinch movement exceeds platform touch slop");
+        System.out.println("Native pinch threshold="+minimum+"px; move spans="+first+","+second+","+maximum);
+        injectPreviewTouch(down,android.view.MotionEvent.ACTION_DOWN,new int[]{0},new float[]{x-initial/2},new float[]{y});
+        injectPreviewTouch(down,android.view.MotionEvent.ACTION_POINTER_DOWN|(1<<android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT),new int[]{0,1},new float[]{x-initial/2,x+initial/2},new float[]{y,y});
+        // Reach the platform's minimum span, then send further MOVE events that actually scale.
+        for(float span:new float[]{first,second,maximum})injectPreviewTouch(down,android.view.MotionEvent.ACTION_MOVE,new int[]{0,1},new float[]{x-span/2,x+span/2},new float[]{y,y});
+        injectPreviewTouch(down,android.view.MotionEvent.ACTION_POINTER_UP|(lifted<<android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT),new int[]{0,1},new float[]{x-maximum/2,x+maximum/2},new float[]{y,y});
         float[] before=new float[9],after=new float[9];runOnMainSync(()->{check(image[0].zoomFactor()>1,"two-finger pinch actually zooms the derivative");image[0].getImageMatrix().getValues(before);});
-        int survivor=1-lifted;float survivorX=x+(survivor==0?-70:70);
+        int survivor=1-lifted;float survivorX=x+(survivor==0?-maximum/2:maximum/2);
         injectPreviewTouch(down,android.view.MotionEvent.ACTION_MOVE,new int[]{survivor},new float[]{survivorX+3},new float[]{y});
         runOnMainSync(()->image[0].getImageMatrix().getValues(after));check(Math.abs(after[2]-before[2])<=4&&Math.abs(after[5]-before[5])<=1,"lifting pointer "+lifted+" does not jump image on remaining drag");
         injectPreviewTouch(down,android.view.MotionEvent.ACTION_UP,new int[]{survivor},new float[]{survivorX+3},new float[]{y});
@@ -234,7 +239,7 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
         synchronized(controller){check(controller.entries().isEmpty(),"preview never queues or saves originals");}
         clickDialog("下一张预览");awaitIdle();check(dialogContains(second),"next derivative follows gallery order");
         clickDialog("上一张预览");awaitIdle();check(dialogContains(first)&&dialogContains("取消选择"),"previous retains per-photo selection");
-        previewBounds();pinchThenLift(0);pinchThenLift(1);clickDialog("适应屏幕");screenshot("10-fullscreen-preview");
+        previewBounds();screenshot("10-fullscreen-preview");pinchThenLift(0);pinchThenLift(1);clickDialog("适应屏幕");
         ActivityMonitor rotation=addMonitor(MainActivity.class.getName(),null,false);runOnMainSync(()->activity.recreate());Activity restored=waitForMonitorWithTimeout(rotation,60000);removeMonitor(rotation);check(restored!=null,"preview activity recreates");activity=(MainActivity)restored;waitForIdleSync();
         check(dialogContains(first)&&dialogContains("取消选择"),"recreated preview retains source and selection");
         clickDialog("重新加载预览");awaitIdle();check(previewDescription("缩放1.0倍"),"explicit reload leaves preview usable after recreation");
