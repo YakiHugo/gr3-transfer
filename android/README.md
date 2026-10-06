@@ -117,6 +117,8 @@ test app before installation.
 6. 点「保存到相册」，阅读提示并点「确认保存」
 7. 保存完成后点「查看照片」，或到 Pictures/GR III Transfer 中查找
 
+「更多 → 清理已保存记录」仅移除已经写入相册的记录，保留待保存、失败和已取消项，释放托盘名额；不会删除相册照片。
+
 「更多」包含刷新相机照片、Wi-Fi 设置、演示照片、断开连接、清空导入记录与隐私说明。演示图片单独保存在 Pictures/GR III Transfer Demo。
 
 The app does not request Wi-Fi credentials, join networks, use Bluetooth, scan

@@ -261,6 +261,10 @@ final class TransferController {
         while ((count = in.read(buffer)) != -1) { token.check(); if (bytes.size() + count > 2 * 1024 * 1024) throw new TransferException("预览图片过大。"); bytes.write(buffer, 0, count); }
         return bytes.toByteArray();
     }
+    synchronized void clearSaved() {
+        if(busy)return;
+        int count=tray.clearSaved();status="已清理 "+count+" 条已保存记录，未保存原片和相册照片均保留。";changed();
+    }
     synchronized void clear() { if (busy) return; tray.clear(); status = "导入记录已清空，已保存的照片不受影响。"; changed(); }
     private static String message(Exception error, CancelToken token) {
         if (token.isCancelled()) return "操作已取消，可重新连接或重试。";

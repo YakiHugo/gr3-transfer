@@ -36,6 +36,17 @@ public final class TransferTray {
         for (Entry e : entries.values()) if (e.retryable(session)) { e.status = Status.QUEUED; e.message = "等待重新导入"; eligible.add(e); }
         return eligible;
     }
+    /** Drops only confirmed saved records; never deletes a MediaStore URI. */
+    public int clearSaved() {
+        int removed=0;Iterator<Entry> iterator=entries.values().iterator();
+        while(iterator.hasNext()) {
+            Entry entry=iterator.next();
+            if(entry.status!=Status.SAVED||entry.savedUri==null)continue;
+            if(entry.file!=null&&entry.file.exists()&&!entry.file.delete())continue;
+            iterator.remove();removed++;
+        }
+        return removed;
+    }
     public void clear() { for (Entry e : entries.values()) if (e.file != null) e.file.delete(); entries.clear(); }
     public boolean hasUnsaved() { for (Entry e : entries.values()) if (e.unsaved()) return true; return false; }
 }

@@ -157,6 +157,16 @@ public final class CoreTests {
         check(GalleryRules.reconcileSelection(selectedGallery,List.of()).isEmpty(),"empty refresh clears unavailable selection");
         check(GalleryRules.reconcileSelection(Set.of(tied.get(0).key()),List.of(tied.get(1))).isEmpty(),"refresh never remaps a selection across folders");
         check(new ArrayList<>(GalleryRules.reconcileSelection(new LinkedHashSet<>(List.of(gallery.get(1).key(),gallery.get(0).key())),gallery)).equals(List.of(gallery.get(1).key(),gallery.get(0).key())),"refresh preserves selection admission order");
+        TransferTray mixedTray=new TransferTray();List<TransferTray.Entry> mixed=mixedTray.admit(SESSION,gallery,false);
+        mixed.get(0).status=TransferTray.Status.SAVED;mixed.get(0).savedUri="content://saved/known";mixed.get(0).receipt=minimal;
+        mixed.get(1).status=TransferTray.Status.READY;mixed.get(1).receipt=minimal;mixed.get(1).file=File.createTempFile("gr3-keep-unsaved-",".jpg");
+        mixed.get(2).status=TransferTray.Status.CANCELLED;
+        check(mixedTray.clearSaved()==1&&mixedTray.all().size()==2,"clear saved removes only confirmed saved records");
+        check(mixedTray.hasUnsaved()&&mixed.get(1).file.exists()&&mixedTray.stagedBytes()==MINIMAL.length,"clear saved preserves unsaved original and staging accounting");
+        check(mixedTray.all().contains(mixed.get(2)),"clear saved preserves failed and cancelled records");
+        check(mixedTray.clearSaved()==0,"repeated clear saved is idempotent");
+        mixed.get(2).status=TransferTray.Status.SAVED;check(mixedTray.clearSaved()==0,"status without published URI is not discarded as saved");
+        check(mixedTray.admit(SESSION,List.of(gallery.get(0)),false).size()==1,"clearing saved record frees its tray slot");mixedTray.clear();
         System.out.println("PASS "+tests+" native Android core assertions; no camera/network/device contacted");
     }
 }

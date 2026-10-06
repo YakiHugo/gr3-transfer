@@ -186,6 +186,8 @@ public final class MainActivity extends Activity {
         labels.add("打开 Wi-Fi 设置");actions.add(()->startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS)));
         labels.add("试用演示照片");actions.add(()->controller.connect(true));
         if(controller.connected){labels.add("断开连接");actions.add(controller::disconnect);labels.add("照片与连接详情");actions.add(this::connectionDetails);}
+        long savedCount=controller.entries().stream().filter(e->e.status==TransferTray.Status.SAVED&&e.savedUri!=null).count();
+        if(savedCount>0){labels.add("清理已保存记录（"+savedCount+"）");actions.add(controller::clearSaved);}
         if(!controller.entries().isEmpty()){labels.add("清空导入记录");actions.add(this::clearTray);}
         labels.add("使用与隐私说明");actions.add(this::privacy);
         new AlertDialog.Builder(this).setTitle("更多选项").setItems(labels.toArray(new String[0]),(dialog,which)->{
