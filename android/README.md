@@ -157,7 +157,7 @@ and `DEMO_` filename prefix.
 - Up to 48 tray entries, 128 MiB per JPEG and 256 MiB of retained private originals;
   one camera read at a time. JSON is bounded to 8 MiB, 16 nested levels and
   200,000 parser values; listing is capped at 100,000 entries / 50,000 JPEGs
-- Thumbnails are separately limited to 2 MiB each and one page of 20; decoding
+- Thumbnails are separately limited to 2 MiB each, loaded at most 20 per page, and retained in a 24-entry LRU cache; decoding
   checks dimensions and downsamples to at most 640 pixels per side
 - Connection deadline: 12 seconds; read idle timeout: 15 seconds; total deadline:
   25 seconds for metadata, 180 seconds for images
@@ -296,8 +296,8 @@ run, and the hardware checklist remains open.
   RAW badges/details, declined/confirmed individual removal, selective retry,
   busy removal guards and mixed saved/unsaved cleanup with real MediaStore readback
 - `test-emulator.sh` now includes that phase and the existing native layout phase. The hosted Android workflow adds a
-  disposable API 29 software-emulator job, using official SDK tools, preaccepted
-  runner licenses, no KVM permission changes, and synthetic fixtures only. Logs
+  disposable API 29 emulator job, using official SDK tools, preaccepted
+  runner licenses, two virtual CPUs and synthetic fixtures only. Acceleration is used only when `/dev/kvm` is already readable/writable and the official probe succeeds; otherwise the software fallback remains. No KVM, group or host security permissions are changed. Logs
   and app screenshots are uploaded even on failure
 - **This batch has no local SDK or emulator available.** Core tests and source
   audits passed locally; new APK compilation, lint and runtime results must be
@@ -317,3 +317,12 @@ run, and the hardware checklist remains open.
   is available for this change: lint/APK compilation and all runtime assertions must
   pass on the final hosted commit before this feature is considered verified
 - Physical GR III, Android phone and modern Android runtime remain unverified
+
+
+### Full-screen selection preview
+
+Tap a thumbnail or 「查看预览」 to open a full-screen native derivative viewer. Previous/next follows the active search, folder, selected-only and sorting view; selection remains shared with the gallery. Pinch or use the zoom/fit buttons, and drag within bounded image edges. Rotation preserves the current source/photo and selection. Closing an in-flight preview cancels that derivative read; changing source closes the old preview.
+
+Preview is explicitly a thumbnail, not an original-resolution claim. Original transfer and MediaStore byte handling are unchanged. Both byte and decoded-image preview caches are bounded to 24 entries, with each network derivative still limited to 2 MiB and decoded dimensions sampled to at most 640 pixels. No new endpoint, permission, camera setting or RAW request is introduced.
+
+Production geometry/navigation/cache tests and a native `preview` instrumentation phase cover fit/pan/zoom bounds, natural filtered navigation, in-preview selection, recreation, explicitly held-load cancellation, source replacement, and portrait/landscape screenshots. Exact-head emulator results are required before claiming runtime acceptance.

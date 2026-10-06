@@ -31,8 +31,8 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
             controller = ((TransferApplication) activity.getApplication()).controller;
             waitForIdleSync(); awaitIdle();
             if(!phase.equals("smoke")) {
-                if(phase.equals("tools")||phase.equals("layout")||phase.equals("prepare-death")){runOnMainSync(()->controller.connect(true));awaitIdle();}
-                if(phase.equals("tools"))verifyGalleryTools();else if(phase.equals("layout"))verifyLayout();else if(phase.equals("prepare-death"))prepareProcessDeath();else if(phase.equals("verify-death"))verifyProcessDeath();else if(phase.equals("verify-death-cleared"))verifyProcessDeathCleared();else throw new AssertionError("Unknown phase");
+                if(phase.equals("preview")||phase.equals("tools")||phase.equals("layout")||phase.equals("prepare-death")){runOnMainSync(()->controller.connect(true));awaitIdle();}
+                if(phase.equals("preview"))verifyPhotoPreview();else if(phase.equals("tools"))verifyGalleryTools();else if(phase.equals("layout"))verifyLayout();else if(phase.equals("prepare-death"))prepareProcessDeath();else if(phase.equals("verify-death"))verifyProcessDeath();else if(phase.equals("verify-death-cleared"))verifyProcessDeathCleared();else throw new AssertionError("Unknown phase");
                 result.putString("stream","PASS "+assertions+" Android process-lifecycle assertions: "+phase+"\n");finish(Activity.RESULT_OK,result);return;
             }
             screenshot("01-onboarding");
@@ -192,6 +192,73 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
         synchronized(controller){check(controller.entries().size()==1&&controller.hasUnsaved()&&unsaved.exists(),"clear-saved UI preserves unsaved original in mixed tray");}
         for(String uri:createdMedia)try(InputStream in=getTargetContext().getContentResolver().openInputStream(android.net.Uri.parse(uri))){check(OriginalCopy.inspect(in,-1,new CancelToken()).bytes>0,"clear-saved retains published MediaStore original");}
         runOnMainSync(controller::clear);cleanupCreatedMedia();screenshot("07-gallery-tools");
+    }
+    private boolean descriptionContains(AccessibilityNodeInfo node,String text){if(node==null)return false;if(node.getContentDescription()!=null&&node.getContentDescription().toString().contains(text))return true;for(int i=0;i<node.getChildCount();i++)if(descriptionContains(node.getChild(i),text))return true;return false;}
+    private boolean previewDescription(String text){for(AccessibilityNodeInfo root:dialogRoots())if(descriptionContains(root,text))return true;return false;}
+    private android.app.Dialog previewDialog()throws Exception{java.lang.reflect.Field field=MainActivity.class.getDeclaredField("previewDialog");field.setAccessible(true);return (android.app.Dialog)field.get(activity);}
+    private void previewBounds()throws Exception {
+        android.app.Dialog dialog=previewDialog();check(dialog!=null,"preview dialog exists");
+        runOnMainSync(()->{
+            View root=dialog.getWindow().getDecorView();int target=Math.round(48*getTargetContext().getResources().getDisplayMetrics().density);
+            for(String label:new String[]{"关闭预览","选择此张","取消选择"}){View control=find(root,label);if(control==null)continue;android.graphics.Rect rect=new android.graphics.Rect();check(control.getGlobalVisibleRect(rect)&&rect.height()>=target&&rect.height()>=control.getHeight()&&rect.width()>=control.getWidth(),"preview primary action fully visible at 48dp: "+label);}
+            ImageView image=firstImage(root);android.graphics.Rect rect=new android.graphics.Rect();check(image!=null&&image.getGlobalVisibleRect(rect)&&rect.width()>=64&&rect.height()>=64,"preview image retains visible small-screen viewport");
+        });
+    }
+    private void injectPreviewTouch(long down,int action,int[] ids,float[] xs,float[] ys){
+        android.view.MotionEvent.PointerProperties[] properties=new android.view.MotionEvent.PointerProperties[ids.length];android.view.MotionEvent.PointerCoords[] coords=new android.view.MotionEvent.PointerCoords[ids.length];
+        for(int i=0;i<ids.length;i++){properties[i]=new android.view.MotionEvent.PointerProperties();properties[i].id=ids[i];properties[i].toolType=android.view.MotionEvent.TOOL_TYPE_FINGER;coords[i]=new android.view.MotionEvent.PointerCoords();coords[i].x=xs[i];coords[i].y=ys[i];coords[i].pressure=1;coords[i].size=1;}
+        android.view.MotionEvent event=android.view.MotionEvent.obtain(down,SystemClock.uptimeMillis(),action,ids.length,properties,coords,0,0,1,1,0,0,android.view.InputDevice.SOURCE_TOUCHSCREEN,0);
+        try{check(getUiAutomation().injectInputEvent(event,true),"native preview touch event injected");}finally{event.recycle();}waitForIdleSync();
+    }
+    private void pinchThenLift(int lifted)throws Exception {
+        android.app.Dialog dialog=previewDialog();android.graphics.Rect rect=new android.graphics.Rect();ZoomPreview[] image=new ZoomPreview[1];
+        runOnMainSync(()->{image[0]=(ZoomPreview)firstImage(dialog.getWindow().getDecorView());check(image[0].getGlobalVisibleRect(rect),"gesture starts in visible preview");image[0].fit();});
+        float x=rect.exactCenterX(),y=rect.exactCenterY();long down=SystemClock.uptimeMillis();
+        float minimum=android.view.ViewConfiguration.get(activity).getScaledMinimumScalingSpan(),maximum=rect.width()-24;
+        check(maximum>minimum+32,"viewport supports a real pinch above platform minimum: "+minimum+"px in "+rect.width()+"px");
+        float initial=Math.max(20,Math.min(60,minimum/2)),first=minimum+(maximum-minimum)/3,second=minimum+2*(maximum-minimum)/3;
+        check(first-initial>2*android.view.ViewConfiguration.get(activity).getScaledTouchSlop(),"pinch movement exceeds platform touch slop");
+        System.out.println("Native pinch threshold="+minimum+"px; move spans="+first+","+second+","+maximum);
+        injectPreviewTouch(down,android.view.MotionEvent.ACTION_DOWN,new int[]{0},new float[]{x-initial/2},new float[]{y});
+        injectPreviewTouch(down,android.view.MotionEvent.ACTION_POINTER_DOWN|(1<<android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT),new int[]{0,1},new float[]{x-initial/2,x+initial/2},new float[]{y,y});
+        // Reach the platform's minimum span, then send further MOVE events that actually scale.
+        for(float span:new float[]{first,second,maximum})injectPreviewTouch(down,android.view.MotionEvent.ACTION_MOVE,new int[]{0,1},new float[]{x-span/2,x+span/2},new float[]{y,y});
+        injectPreviewTouch(down,android.view.MotionEvent.ACTION_POINTER_UP|(lifted<<android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT),new int[]{0,1},new float[]{x-maximum/2,x+maximum/2},new float[]{y,y});
+        float[] before=new float[9],after=new float[9];runOnMainSync(()->{check(image[0].zoomFactor()>1,"two-finger pinch actually zooms the derivative");image[0].getImageMatrix().getValues(before);});
+        int survivor=1-lifted;float survivorX=x+(survivor==0?-maximum/2:maximum/2);
+        injectPreviewTouch(down,android.view.MotionEvent.ACTION_MOVE,new int[]{survivor},new float[]{survivorX+3},new float[]{y});
+        runOnMainSync(()->image[0].getImageMatrix().getValues(after));check(Math.abs(after[2]-before[2])<=4&&Math.abs(after[5]-before[5])<=1,"lifting pointer "+lifted+" does not jump image on remaining drag");
+        injectPreviewTouch(down,android.view.MotionEvent.ACTION_UP,new int[]{survivor},new float[]{survivorX+3},new float[]{y});
+    }
+    private void verifyPhotoPreview()throws Exception {
+        String first=controller.inventory.photos.get(0).name,second=controller.inventory.photos.get(1).name;
+        click("查看预览");awaitIdle();check(dialogContains(first)&&dialogContains("预览为缩略图"),"full-screen derivative preview identifies source and byte boundary");
+        clickDialog("放大");check(previewDescription("缩放2.0倍"),"zoom action changes actual image matrix state");
+        clickDialog("适应屏幕");check(previewDescription("缩放1.0倍"),"fit action restores initial preview scale");
+        clickDialog("选择此张");check(dialogContains("取消选择"),"selection can be toggled from preview");
+        synchronized(controller){check(controller.entries().isEmpty(),"preview never queues or saves originals");}
+        clickDialog("下一张预览");awaitIdle();check(dialogContains(second),"next derivative follows gallery order");
+        clickDialog("上一张预览");awaitIdle();check(dialogContains(first)&&dialogContains("取消选择"),"previous retains per-photo selection");
+        previewBounds();screenshot("10-fullscreen-preview");pinchThenLift(0);pinchThenLift(1);clickDialog("适应屏幕");
+        ActivityMonitor rotation=addMonitor(MainActivity.class.getName(),null,false);runOnMainSync(()->activity.recreate());Activity restored=waitForMonitorWithTimeout(rotation,60000);removeMonitor(rotation);check(restored!=null,"preview activity recreates");activity=(MainActivity)restored;waitForIdleSync();
+        check(dialogContains(first)&&dialogContains("取消选择"),"recreated preview retains source and selection");
+        clickDialog("重新加载预览");awaitIdle();check(previewDescription("缩放1.0倍"),"explicit reload leaves preview usable after recreation");
+        sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK);waitForIdleSync();runOnMainSync(()->check(!activity.isFinishing()&&find(activity.getWindow().getDecorView(),"导入原片（1）")!=null,"system Back dismisses preview and retains gallery selection"));check(!dialogContains("关闭预览"),"system Back closes only the preview window");
+        runOnMainSync(()->{controller.thumbnails.clear();});click("更多");clickDialog("筛选与排序");clickDialog("清除筛选");
+        java.lang.reflect.Field workerField=TransferController.class.getDeclaredField("worker");workerField.setAccessible(true);
+        java.util.concurrent.ExecutorService worker=(java.util.concurrent.ExecutorService)workerField.get(controller);
+        java.util.concurrent.CountDownLatch started=new java.util.concurrent.CountDownLatch(1),gate=new java.util.concurrent.CountDownLatch(1);
+        worker.execute(()->{started.countDown();try{gate.await(30,java.util.concurrent.TimeUnit.SECONDS);}catch(InterruptedException error){Thread.currentThread().interrupt();}});
+        check(started.await(10,java.util.concurrent.TimeUnit.SECONDS),"synthetic derivative worker held for interruption test");
+        try{click("查看预览");check(controller.busy,"preview load is actually pending before close");clickDialog("关闭预览");}finally{gate.countDown();}awaitIdle();
+        synchronized(controller){check(controller.entries().isEmpty()&&controller.connected&&controller.thumbnails.isEmpty(),"closing pending preview cancels the derivative without importing an original");}
+        click("查看预览");awaitIdle();runOnMainSync(controller::disconnect);waitForIdleSync();
+        check(!dialogContains("关闭预览"),"disconnect closes stale source preview");
+        runOnMainSync(()->controller.connect(true));awaitIdle();click("查看预览");awaitIdle();
+        ActivityMonitor landscape=addMonitor(MainActivity.class.getName(),null,false);runOnMainSync(()->activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));Activity rotated=waitForMonitorWithTimeout(landscape,60000);removeMonitor(landscape);check(rotated!=null,"landscape preview recreates");activity=(MainActivity)rotated;waitForIdleSync();
+        check(dialogContains("选择此张")&&dialogContains("关闭预览"),"landscape keeps primary preview actions available");previewBounds();screenshot("11-landscape-preview");clickDialog("关闭预览");
+        click("更多");clickDialog("筛选与排序");clickDialog("全部文件夹（12）");clickDialog("101RICOH（6）");clickDialog("相机列表顺序");clickDialog("文件名：从大到小");clickDialog("应用");click("查看预览");awaitIdle();
+        check(dialogContains("R0000012.JPG")&&dialogContains("1 / 6"),"preview starts at active folder and descending ordering");clickDialog("下一张预览");awaitIdle();check(dialogContains("R0000011.JPG")&&dialogContains("2 / 6"),"next preview stays within filtered ordering");clickDialog("关闭预览");
     }
     private void verifyLayout()throws Exception {
         runOnMainSync(()->controller.loadThumbnails(controller.inventory.photos));awaitIdle();

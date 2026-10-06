@@ -18,7 +18,13 @@ public final class MainActivity extends Activity {
     private TextView status;
     private String selectionSession = "", searchQuery = "", filterFolder = "";
     private final Set<String> selected = new LinkedHashSet<>();
-    private final Map<String,Bitmap> bitmapCache = new HashMap<>();
+    private final Map<String,Bitmap> bitmapCache = new PreviewCache<>();
+    private Dialog previewDialog;
+    private String previewKey,previewSession="";
+    private boolean previewOwnLoad;
+    private ZoomPreview previewImage;
+    private TextView previewTitle,previewInfo,previewMessage;
+    private Button previewPrevious,previewNext,previewSelect,previewLoad,previewZoomIn,previewZoomOut,previewFit;
     private int page, renderGeneration;
     private CameraRules.Inventory selectionInventory;
     private boolean trayTab, selectedOnly;
@@ -27,7 +33,7 @@ public final class MainActivity extends Activity {
     private static final int INK = Color.rgb(30,43,39), MUTED = Color.rgb(98,113,105), GREEN = Color.rgb(32,107,82), PAPER = Color.rgb(246,247,243);
     @Override public void onCreate(Bundle state) {
         super.onCreate(state); controller = ((TransferApplication)getApplication()).controller;
-        if (state != null) { selectedOnly = state.getBoolean("selectedOnly"); sortOrder = GalleryRules.SortOrder.restore(state.getString("sort")); filterFolder = state.getString("folder", ""); searchQuery = state.getString("query", ""); page = state.getInt("page"); trayTab = state.getBoolean("tray"); selectionSession = state.getString("session", ""); ArrayList<String> saved = state.getStringArrayList("selected"); if (saved != null) selected.addAll(saved); }
+        if (state != null) { previewKey=state.getString("previewKey");previewSession=state.getString("previewSession","");previewOwnLoad=state.getBoolean("previewOwnLoad"); selectedOnly = state.getBoolean("selectedOnly"); sortOrder = GalleryRules.SortOrder.restore(state.getString("sort")); filterFolder = state.getString("folder", ""); searchQuery = state.getString("query", ""); page = state.getInt("page"); trayTab = state.getBoolean("tray"); selectionSession = state.getString("session", ""); ArrayList<String> saved = state.getStringArrayList("selected"); if (saved != null) selected.addAll(saved); }
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(PAPER); root.setPadding(dp(18), dp(12), dp(18), dp(10));
         if (Build.VERSION.SDK_INT >= 30) root.setOnApplyWindowInsetsListener((view, insets) -> {
             Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
@@ -48,7 +54,8 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onStart() { super.onStart(); controller.listen(this::render); render(); }
     @Override protected void onStop() { controller.listen(null); if (!isChangingConfigurations()) controller.cancel(); super.onStop(); }
-    @Override protected void onSaveInstanceState(Bundle out) { out.putBoolean("selectedOnly",selectedOnly); out.putString("sort",sortOrder.name()); out.putString("folder",filterFolder); out.putString("query",searchQuery); out.putInt("page",page); out.putBoolean("tray",trayTab); out.putString("session",selectionSession); out.putStringArrayList("selected",new ArrayList<>(selected)); super.onSaveInstanceState(out); }
+    @Override protected void onSaveInstanceState(Bundle out) { out.putString("previewKey",previewKey);out.putString("previewSession",previewSession);out.putBoolean("previewOwnLoad",previewOwnLoad); out.putBoolean("selectedOnly",selectedOnly); out.putString("sort",sortOrder.name()); out.putString("folder",filterFolder); out.putString("query",searchQuery); out.putInt("page",page); out.putBoolean("tray",trayTab); out.putString("session",selectionSession); out.putStringArrayList("selected",new ArrayList<>(selected)); super.onSaveInstanceState(out); }
+    @Override protected void onDestroy(){if(previewDialog!=null){previewDialog.setOnDismissListener(null);previewDialog.dismiss();previewDialog=null;}super.onDestroy();}
     @android.annotation.SuppressLint("GestureBackNavigation")
     @Override public void onBackPressed() { leave(); }
     private void leave() {
@@ -78,6 +85,7 @@ public final class MainActivity extends Activity {
             if (trayTab) renderTray(); else renderCamera();
             if (controller.busy) { bottom.removeAllViews(); primary(bottom,"取消当前操作",controller::cancel,true); }
         }
+        renderPhotoPreview();
         scroll.post(() -> { if (generation == renderGeneration) scroll.scrollTo(0,y); });
     }
     private void renderCamera() {
@@ -133,8 +141,8 @@ public final class MainActivity extends Activity {
         }
         content.addView(text("预览仅供选片；导入时读取完整 JPEG 原片。",12,false));
     }
-    private LinearLayout photoCard(CameraRules.Photo photo,int height) {
-        LinearLayout tile=card(); byte[] thumbnail=controller.thumbnails.get(photo.key()); Bitmap bitmap=bitmapCache.get(photo.key());
+    private Bitmap thumbnailBitmap(CameraRules.Photo photo) {
+        byte[] thumbnail=controller.thumbnails.get(photo.key());Bitmap bitmap=bitmapCache.get(photo.key());
         if(bitmap==null&&thumbnail!=null) {
             BitmapFactory.Options bounds=new BitmapFactory.Options();bounds.inJustDecodeBounds=true;BitmapFactory.decodeByteArray(thumbnail,0,thumbnail.length,bounds);
             if(bounds.outWidth>0&&bounds.outHeight>0&&bounds.outWidth<=16000&&bounds.outHeight<=16000) {
@@ -143,8 +151,14 @@ public final class MainActivity extends Activity {
                 bitmap=BitmapFactory.decodeByteArray(thumbnail,0,thumbnail.length,options);if(bitmap!=null)bitmapCache.put(photo.key(),bitmap);
             }
         }
+        return bitmap;
+    }
+    private LinearLayout photoCard(CameraRules.Photo photo,int height) {
+        LinearLayout tile=card();Bitmap bitmap=thumbnailBitmap(photo);
         if(bitmap!=null) {
-            ImageView image=new ImageView(this);image.setImageBitmap(bitmap);image.setScaleType(ImageView.ScaleType.CENTER_INSIDE);image.setContentDescription("照片预览："+photo.key());tile.addView(image,new LinearLayout.LayoutParams(-1,dp(height)));
+            ImageView image=new ImageView(this);image.setImageBitmap(bitmap);image.setScaleType(ImageView.ScaleType.CENTER_INSIDE);image.setContentDescription("查看预览："+photo.key());image.setOnClickListener(v->showPhotoPreview(photo.key()));image.setEnabled(!controller.busy);tile.addView(image,new LinearLayout.LayoutParams(-1,dp(height)));
+        } else {
+            Button placeholder=new Button(this);placeholder.setText("查看预览");placeholder.setContentDescription("查看预览："+photo.key());placeholder.setAllCaps(false);placeholder.setTextColor(MUTED);placeholder.setBackground(background(Color.rgb(234,239,232),10));placeholder.setOnClickListener(v->showPhotoPreview(photo.key()));placeholder.setEnabled(!controller.busy);tile.addView(placeholder,new LinearLayout.LayoutParams(-1,dp(height)));
         }
         CheckBox check=new CheckBox(this);check.setText(photo.name);check.setContentDescription(photo.name+"，文件夹 "+photo.folder);check.setTextColor(INK);check.setTextSize(14);check.setMinHeight(dp(48));check.setButtonTintList(ColorStateList.valueOf(GREEN));check.setChecked(selected.contains(photo.key()));check.setEnabled(!controller.busy);
         check.setOnCheckedChangeListener((button,checked)->{
@@ -153,6 +167,59 @@ public final class MainActivity extends Activity {
         });tile.addView(check);
         TextView folder=text(photo.folder,11,false);folder.setTextColor(MUTED);tile.addView(folder);
         if(!photo.rawFormats.isEmpty())tile.addView(text("JPEG + "+photo.rawLabel()+" · 仅导入 JPEG",11,false));return tile;
+    }
+    private CameraRules.Photo previewPhoto(){for(CameraRules.Photo photo:controller.inventory.photos)if(photo.key().equals(previewKey))return photo;return null;}
+    private void showPhotoPreview(String key){
+        synchronized(controller){if(controller.busy||!controller.connected)return;previewKey=key;previewSession=controller.session;}
+        renderPhotoPreview();requestPhotoPreview(false);
+    }
+    private void createPhotoPreview(){
+        previewDialog=new Dialog(this,R.style.AppTheme);previewDialog.setTitle("照片预览");
+        LinearLayout body=new LinearLayout(this);body.setOrientation(LinearLayout.VERTICAL);body.setBackgroundColor(PAPER);body.setPadding(dp(16),dp(10),dp(16),dp(12));body.setFitsSystemWindows(true);
+        LinearLayout header=row();previewTitle=text("",17,true);previewTitle.setMaxLines(getResources().getConfiguration().orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE?1:2);previewTitle.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);header.addView(previewTitle,new LinearLayout.LayoutParams(0,-2,1));addButton(header,"关闭预览",()->previewDialog.dismiss(),true).setLayoutParams(new LinearLayout.LayoutParams(dp(88),-2));body.addView(header);
+        previewInfo=text("",12,false);body.addView(previewInfo);
+        FrameLayout frame=new FrameLayout(this);frame.setBackground(background(Color.rgb(230,234,229),12));previewImage=new ZoomPreview(this);previewImage.setContentDescription("相机预览图，可双指放大和拖动；不是原片");frame.addView(previewImage,new FrameLayout.LayoutParams(-1,-1));
+        previewMessage=text("",14,false);previewMessage.setGravity(Gravity.CENTER);frame.addView(previewMessage,new FrameLayout.LayoutParams(-1,-1));
+        LinearLayout controls=new LinearLayout(this);controls.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout zoom=row();previewZoomOut=addButton(zoom,"缩小",()->previewImage.zoomBy(.5f),false);previewFit=addButton(zoom,"适应屏幕",()->previewImage.fit(),false);previewZoomIn=addButton(zoom,"放大",()->previewImage.zoomBy(2),false);controls.addView(zoom);
+        previewLoad=addButton(controls,"重新加载预览",()->requestPhotoPreview(true),true);
+        controls.addView(text("预览为缩略图，可放大选片；导入时才读取完整 JPEG，原片字节不会改变。",11,false));
+        if(getResources().getConfiguration().orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE){
+            LinearLayout imageRow=row();imageRow.addView(frame,new LinearLayout.LayoutParams(0,-1,1));ScrollView options=new ScrollView(this);options.addView(controls);LinearLayout.LayoutParams side=new LinearLayout.LayoutParams(dp(220),-1);side.setMarginStart(dp(12));imageRow.addView(options,side);body.addView(imageRow,new LinearLayout.LayoutParams(-1,0,1));
+        }else{body.addView(frame,new LinearLayout.LayoutParams(-1,0,1));body.addView(controls);}
+        LinearLayout nav=row();previewPrevious=addButton(nav,"上一张预览",()->navigatePhotoPreview(-1),false);previewSelect=primary(nav,"选择此张",()->{
+            CameraRules.Photo photo=previewPhoto();if(photo!=null)changeSelection(Collections.singletonList(photo),selected.contains(photo.key())?GalleryRules.SelectionAction.DESELECT:GalleryRules.SelectionAction.SELECT);
+        },false);previewNext=addButton(nav,"下一张预览",()->navigatePhotoPreview(1),false);body.addView(nav);
+        previewDialog.setContentView(body);previewDialog.setOnDismissListener(dialog->{
+            if(previewOwnLoad&&previewSession.equals(controller.session)&&controller.busy)controller.cancel();
+            previewOwnLoad=false;previewKey=null;previewSession="";previewDialog=null;
+        });previewDialog.show();previewDialog.getWindow().setLayout(-1,-1);
+    }
+    private void renderPhotoPreview(){
+        if(previewKey==null)return;
+        synchronized(controller){
+            CameraRules.Photo photo=previewPhoto();
+            if(!controller.connected||!previewSession.equals(controller.session)||photo==null){if(previewDialog!=null)previewDialog.dismiss();previewKey=null;previewSession="";return;}
+            if(previewDialog==null)createPhotoPreview();
+            if(!controller.busy)previewOwnLoad=false;
+            List<CameraRules.Photo> photos=filteredPhotos();int index=GalleryRules.previewIndex(photos,previewKey);
+            previewTitle.setText(photo.name);previewInfo.setText(photo.folder+" · "+(index>=0?(index+1)+" / "+photos.size():"不在当前筛选中")+(controller.demo?" · 演示图片":""));
+            Bitmap bitmap=thumbnailBitmap(photo);previewImage.show(bitmap);previewMessage.setVisibility(bitmap==null?View.VISIBLE:View.GONE);previewMessage.setText(controller.busy?"正在读取预览…":"预览暂不可用，请重新加载。原片尚未导入。");
+            boolean idle=!controller.busy;previewPrevious.setEnabled(idle&&index>0);previewNext.setEnabled(idle&&index>=0&&index+1<photos.size());previewSelect.setEnabled(idle);previewSelect.setText(selected.contains(photo.key())?"取消选择":"选择此张");previewSelect.setSelected(selected.contains(photo.key()));previewLoad.setEnabled(idle);previewZoomIn.setEnabled(bitmap!=null);previewZoomOut.setEnabled(bitmap!=null);previewFit.setEnabled(bitmap!=null);
+            for(Button button:new Button[]{previewPrevious,previewNext,previewLoad,previewZoomIn,previewZoomOut,previewFit})styleButton(button,false);styleButton(previewSelect,true);
+        }
+    }
+    private void requestPhotoPreview(boolean force){
+        synchronized(controller){
+            CameraRules.Photo photo=previewPhoto();if(photo==null||controller.busy||!controller.connected||!previewSession.equals(controller.session))return;
+            if(!force&&thumbnailBitmap(photo)!=null)return;
+            bitmapCache.remove(photo.key());controller.thumbnails.remove(photo.key());previewOwnLoad=true;controller.loadThumbnails(Collections.singletonList(photo));
+        }
+        renderPhotoPreview();
+    }
+    private void navigatePhotoPreview(int direction){
+        synchronized(controller){if(controller.busy)return;CameraRules.Photo next=GalleryRules.previewNeighbor(filteredPhotos(),previewKey,direction);if(next==null)return;previewKey=next.key();}
+        renderPhotoPreview();requestPhotoPreview(false);
     }
     private List<CameraRules.Photo> filteredPhotos() { return GalleryRules.sort(GalleryRules.selected(GalleryRules.filter(controller.inventory.photos, searchQuery, filterFolder), selected, selectedOnly), sortOrder); }
     private List<CameraRules.Photo> currentPagePhotos() {
