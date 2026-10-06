@@ -57,6 +57,27 @@ public final class GalleryRules {
     public static int selectedCount(List<CameraRules.Photo> photos, Set<String> keys) {
         int count = 0; for (CameraRules.Photo photo : photos) if (keys.contains(photo.key())) count++; return count;
     }
+    public enum SelectionAction { SELECT, DESELECT, INVERT, CLEAR }
+    public static final class SelectionChange {
+        public final Set<String> keys;
+        public final int omitted;
+        private SelectionChange(Set<String> keys, int omitted) { this.keys=Collections.unmodifiableSet(keys); this.omitted=omitted; }
+    }
+    public static SelectionChange changeSelection(Set<String> selected, List<CameraRules.Photo> page, SelectionAction action) {
+        Set<String> result=new LinkedHashSet<>();
+        if (action == SelectionAction.CLEAR) return new SelectionChange(result,0);
+        for (String key : selected) if (result.size() < CameraRules.MAX_ENTRIES) result.add(key);
+        Set<String> pageKeys=new LinkedHashSet<>(); for (CameraRules.Photo photo : page) pageKeys.add(photo.key());
+        // Remove first so page inversion can use the slots freed by this same action.
+        if (action == SelectionAction.DESELECT || action == SelectionAction.INVERT) result.removeAll(pageKeys);
+        int omitted=0;
+        if (action != SelectionAction.DESELECT) for (String key : pageKeys) {
+            if (action == SelectionAction.INVERT && selected.contains(key)) continue;
+            if (result.contains(key)) continue;
+            if (result.size() < CameraRules.MAX_ENTRIES) result.add(key); else omitted++;
+        }
+        return new SelectionChange(result,omitted);
+    }
     public static Map<String,Integer> folders(List<CameraRules.Photo> photos) {
         Map<String,Integer> counts = new TreeMap<>();
         for (CameraRules.Photo photo : photos) counts.put(photo.folder, counts.getOrDefault(photo.folder, 0) + 1);

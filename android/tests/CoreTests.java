@@ -141,6 +141,18 @@ public final class CoreTests {
         check(GalleryRules.selectedCount(gallery,selectedGallery)==1&&GalleryRules.selectedCount(List.of(gallery.get(0)),selectedGallery)==0,"selection counts identify hidden selected photos");
         check(GalleryRules.selected(tied,Set.of(tied.get(0).key()),true).equals(List.of(tied.get(0))),"selected-only distinguishes same filenames in separate folders");
         check(selectedGallery.size()==1&&gallery.size()==3,"selected-only filter leaves selection and inventory untouched");
+        GalleryRules.SelectionChange inverted=GalleryRules.changeSelection(Set.of(gallery.get(0).key(),"hidden/key.JPG"),gallery,GalleryRules.SelectionAction.INVERT);
+        check(inverted.keys.equals(Set.of("hidden/key.JPG",gallery.get(1).key(),gallery.get(2).key())),"page inversion preserves hidden choices and flips visible ones");
+        Set<String> nearLimit=new LinkedHashSet<>();for(int i=0;i<47;i++)nearLimit.add("100RICOH/X"+i+".JPG");
+        GalleryRules.SelectionChange limited=GalleryRules.changeSelection(nearLimit,gallery,GalleryRules.SelectionAction.SELECT);
+        check(limited.keys.size()==48&&limited.omitted==2,"page selection enforces 48-photo bound and reports omissions");
+        Set<String> full=new LinkedHashSet<>(nearLimit);full.add(gallery.get(2).key());
+        GalleryRules.SelectionChange freesFirst=GalleryRules.changeSelection(full,gallery,GalleryRules.SelectionAction.INVERT);
+        check(freesFirst.keys.size()==48&&freesFirst.keys.contains(gallery.get(0).key())&&!freesFirst.keys.contains(gallery.get(2).key())&&freesFirst.omitted==1,"inversion frees selected slots before admitting new choices");
+        check(GalleryRules.changeSelection(full,gallery,GalleryRules.SelectionAction.DESELECT).keys.equals(nearLimit),"deselect page preserves off-page selection");
+        check(GalleryRules.changeSelection(full,List.of(),GalleryRules.SelectionAction.CLEAR).keys.isEmpty(),"clear selection spans all pages");
+        check(GalleryRules.changeSelection(Set.of(),List.of(gallery.get(0),gallery.get(0)),GalleryRules.SelectionAction.INVERT).keys.size()==1,"duplicate page key toggles only once");
+        check(full.size()==48&&nearLimit.size()==47,"selection operations do not mutate source selection");
         System.out.println("PASS "+tests+" native Android core assertions; no camera/network/device contacted");
     }
 }
