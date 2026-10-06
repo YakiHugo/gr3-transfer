@@ -27,7 +27,7 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
             waitForIdleSync();
             if(!phase.equals("smoke")) {
                 runOnMainSync(()->controller.connect(true));awaitIdle();
-                if(phase.equals("layout"))verifyLayout();else if(phase.equals("prepare-death"))prepareProcessDeath();else if(phase.equals("verify-death"))verifyProcessDeath();else throw new AssertionError("Unknown phase");
+                if(phase.equals("tools"))verifyGalleryTools();else if(phase.equals("layout"))verifyLayout();else if(phase.equals("prepare-death"))prepareProcessDeath();else if(phase.equals("verify-death"))verifyProcessDeath();else throw new AssertionError("Unknown phase");
                 result.putString("stream","PASS "+assertions+" Android process-lifecycle assertions: "+phase+"\n");finish(Activity.RESULT_OK,result);return;
             }
             screenshot("01-onboarding");
@@ -126,6 +126,18 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
         } finally {
             cleanupCreatedMedia();
         }
+    }
+    private void verifyGalleryTools()throws Exception {
+        String source=controller.session;CameraRules.Photo first=controller.inventory.photos.get(0);click(first.name);
+        click("更多");clickDialog("刷新演示照片");awaitIdle();
+        synchronized(controller){check(controller.connected&&controller.demo&&source.equals(controller.session),"demo refresh preserves source mode and session");check(controller.inventory.photos.size()==12,"demo refresh returns complete inventory");}
+        runOnMainSync(()->check(find(activity.getWindow().getDecorView(),"导入原片（1）")!=null,"refresh preserves selected source key"));
+        click("更多");clickDialog("反选本页照片");
+        runOnMainSync(()->check(find(activity.getWindow().getDecorView(),"导入原片（11）")!=null,"page inversion flips current twelve-photo page"));
+        click("更多");clickDialog("清除全部选择（11）");
+        runOnMainSync(()->check(find(activity.getWindow().getDecorView(),"选择要导入的照片")!=null,"clear selection updates docked action"));
+        runOnMainSync(()->{controller.refresh();controller.cancel();});awaitIdle();
+        synchronized(controller){check(controller.connected&&controller.demo&&source.equals(controller.session)&&controller.inventory.photos.size()==12,"cancelled refresh retains connected inventory");}
     }
     private void verifyLayout()throws Exception {
         runOnMainSync(()->controller.loadThumbnails(controller.inventory.photos));awaitIdle();

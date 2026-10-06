@@ -84,6 +84,41 @@ final class TransferController {
             } finally { end(operation); }
         });
     }
+    void refresh() {
+        CancelToken operation; String sourceSession; Network source; boolean synthetic;
+        synchronized (this) {
+            if (busy || !connected) return;
+            sourceSession=session;source=network;synthetic=demo;operation=begin("正在刷新照片列表，已选照片会保留…");
+        }
+        worker.execute(() -> {
+            boolean identityRejected=false;
+            try {
+                CameraRules.Inventory result;
+                if(synthetic)result=demoInventory();
+                else {
+                    Object properties=transport.json(source,"/v1/props",operation);
+                    try { CameraRules.requireModel(properties); } catch(TransferException error) { identityRejected=true;throw error; }
+                    result=CameraRules.inventory(transport.json(source,"/v1/photos",operation));
+                }
+                operation.check();
+                synchronized(this) {
+                    operation.check();if(!connected||!sourceSession.equals(session)||!Objects.equals(source,network))return;
+                    inventory=result;
+                    Set<String> available=new HashSet<>();for(CameraRules.Photo photo:result.photos)available.add(photo.key());thumbnails.keySet().retainAll(available);
+                    status=(synthetic?"演示照片已刷新":"相机照片已刷新")+" · "+result.photos.size()+" 张 JPEG；仍在列表中的选择已保留。";
+                }
+                changed();
+            } catch(Exception error) {
+                synchronized(this) {
+                    if(sourceSession.equals(session)) {
+                        if(identityRejected){disconnect();status="设备型号发生变化，请重新连接。";}
+                        else status="未能刷新，上一份照片列表和选择已保留。"+message(error,operation);
+                    }
+                }
+                changed();
+            } finally { end(operation); }
+        });
+    }
     private CameraRules.Inventory demoInventory() throws IOException {
         String text;
         try (InputStream in = context.getAssets().open("manifest.json")) { ByteArrayOutputStream bytes = new ByteArrayOutputStream(); byte[] buffer = new byte[8192]; int n; while ((n = in.read(buffer)) != -1) { if (bytes.size() + n > CameraRules.MAX_JSON_BYTES) throw new TransferException("演示照片列表过大。"); bytes.write(buffer, 0, n); } text = bytes.toString("UTF-8"); }

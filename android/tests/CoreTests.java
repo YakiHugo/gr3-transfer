@@ -153,6 +153,10 @@ public final class CoreTests {
         check(GalleryRules.changeSelection(full,List.of(),GalleryRules.SelectionAction.CLEAR).keys.isEmpty(),"clear selection spans all pages");
         check(GalleryRules.changeSelection(Set.of(),List.of(gallery.get(0),gallery.get(0)),GalleryRules.SelectionAction.INVERT).keys.size()==1,"duplicate page key toggles only once");
         check(full.size()==48&&nearLimit.size()==47,"selection operations do not mutate source selection");
+        check(GalleryRules.reconcileSelection(new LinkedHashSet<>(List.of(gallery.get(1).key(),"removed/R3.JPG",gallery.get(0).key())),gallery).equals(new LinkedHashSet<>(List.of(gallery.get(1).key(),gallery.get(0).key()))),"refresh retains available selected keys and removes missing photos");
+        check(GalleryRules.reconcileSelection(selectedGallery,List.of()).isEmpty(),"empty refresh clears unavailable selection");
+        check(GalleryRules.reconcileSelection(Set.of(tied.get(0).key()),List.of(tied.get(1))).isEmpty(),"refresh never remaps a selection across folders");
+        check(new ArrayList<>(GalleryRules.reconcileSelection(new LinkedHashSet<>(List.of(gallery.get(1).key(),gallery.get(0).key())),gallery)).equals(List.of(gallery.get(1).key(),gallery.get(0).key())),"refresh preserves selection admission order");
         System.out.println("PASS "+tests+" native Android core assertions; no camera/network/device contacted");
     }
 }

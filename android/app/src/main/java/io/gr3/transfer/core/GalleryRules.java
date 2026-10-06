@@ -54,6 +54,11 @@ public final class GalleryRules {
         for (CameraRules.Photo photo : photos) if (!onlySelected || keys.contains(photo.key())) result.add(photo);
         return result;
     }
+    public static Set<String> reconcileSelection(Set<String> selected, List<CameraRules.Photo> photos) {
+        Set<String> available=new HashSet<>();for(CameraRules.Photo photo:photos)available.add(photo.key());
+        Set<String> result=new LinkedHashSet<>();for(String key:selected)if(available.contains(key)&&result.size()<CameraRules.MAX_ENTRIES)result.add(key);
+        return result;
+    }
     public static int selectedCount(List<CameraRules.Photo> photos, Set<String> keys) {
         int count = 0; for (CameraRules.Photo photo : photos) if (keys.contains(photo.key())) count++; return count;
     }
