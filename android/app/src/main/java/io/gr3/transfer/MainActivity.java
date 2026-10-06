@@ -89,7 +89,7 @@ public final class MainActivity extends Activity {
             addButton(content,"使用与隐私说明",this::privacy,true);
             primary(bottom,"连接 GR III",()->controller.connect(false),!controller.busy); return;
         }
-        List<CameraRules.Photo> photos = GalleryRules.sort(GalleryRules.selected(GalleryRules.filter(controller.inventory.photos, searchQuery, filterFolder), selected, selectedOnly), sortOrder);
+        List<CameraRules.Photo> photos = filteredPhotos();
         int pages = Math.max(1,(photos.size()+PAGE_SIZE-1)/PAGE_SIZE); page = Math.min(page,pages-1);
         int start = page*PAGE_SIZE, end = Math.min(photos.size(),start+PAGE_SIZE);
         List<CameraRules.Photo> visible = new ArrayList<>(photos.subList(start,end));
@@ -106,9 +106,7 @@ public final class MainActivity extends Activity {
         LinearLayout actions=row(); content.addView(actions);
         boolean pageSelected=visible.stream().allMatch(p->selected.contains(p.key()));
         addButton(actions,pageSelected?"取消本页全选":"全选本页",()->{
-            if(pageSelected) for(CameraRules.Photo p:visible)selected.remove(p.key());
-            else for(CameraRules.Photo p:visible)if(selected.size()<CameraRules.MAX_ENTRIES)selected.add(p.key());
-            render();
+            changeSelection(visible,pageSelected?GalleryRules.SelectionAction.DESELECT:GalleryRules.SelectionAction.SELECT);
         },!controller.busy);
         addButton(actions,controller.thumbnails.isEmpty()?"加载预览":"刷新预览",()->{bitmapCache.clear();controller.loadThumbnails(visible);},!controller.busy);
         if (pages > 1) {
@@ -149,6 +147,16 @@ public final class MainActivity extends Activity {
         });tile.addView(check);
         TextView folder=text(photo.folder,11,false);folder.setTextColor(MUTED);tile.addView(folder);return tile;
     }
+    private List<CameraRules.Photo> filteredPhotos() { return GalleryRules.sort(GalleryRules.selected(GalleryRules.filter(controller.inventory.photos, searchQuery, filterFolder), selected, selectedOnly), sortOrder); }
+    private List<CameraRules.Photo> currentPagePhotos() {
+        List<CameraRules.Photo> photos=filteredPhotos();int current=Math.min(page,Math.max(0,(photos.size()-1)/PAGE_SIZE));int start=current*PAGE_SIZE;
+        return new ArrayList<>(photos.subList(start,Math.min(photos.size(),start+PAGE_SIZE)));
+    }
+    private void changeSelection(List<CameraRules.Photo> photos,GalleryRules.SelectionAction action) {
+        if(controller.busy)return;
+        GalleryRules.SelectionChange change=GalleryRules.changeSelection(selected,photos,action);selected.clear();selected.addAll(change.keys);
+        if(change.omitted>0)Toast.makeText(this,"每批最多选择 48 张，另有 "+change.omitted+" 张未加入选择",Toast.LENGTH_LONG).show();render();
+    }
     private void galleryFilters() {
         EditText query=new EditText(this);query.setSingleLine(true);query.setHint("搜索文件名或文件夹");query.setContentDescription("搜索文件名或文件夹");query.setText(searchQuery);
         query.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(128)});
@@ -166,6 +174,8 @@ public final class MainActivity extends Activity {
     private void connectionOptions() {
         ArrayList<String> labels=new ArrayList<>();ArrayList<Runnable> actions=new ArrayList<>();
         if(controller.connected){labels.add("筛选与排序");actions.add(this::galleryFilters);}
+        if(controller.connected&&!controller.inventory.photos.isEmpty()){labels.add("反选本页照片");actions.add(()->changeSelection(currentPagePhotos(),GalleryRules.SelectionAction.INVERT));}
+        if(!selected.isEmpty()){labels.add("清除全部选择（"+selected.size()+"）");actions.add(()->changeSelection(Collections.emptyList(),GalleryRules.SelectionAction.CLEAR));}
         if(controller.connected){labels.add("刷新相机照片");actions.add(()->controller.connect(false));}
         labels.add("打开 Wi-Fi 设置");actions.add(()->startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS)));
         labels.add("试用演示照片");actions.add(()->controller.connect(true));
