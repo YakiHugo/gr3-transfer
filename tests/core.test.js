@@ -261,3 +261,15 @@ test('JSON body timeout remains a timeout rather than an unsupported firmware di
   const adapter = new CameraAdapter({ fetchImpl: async () => new Response(new ReadableStream({ start(controller) { controller.error(new DOMException('private detail', 'TimeoutError')); } })) });
   await assert.rejects(adapter.connect(), error => error.code === 'CAMERA_TIMEOUT' && error.status === 504 && error.cameraStage === 'identity' && !error.message.includes('private'));
 });
+
+
+test('inventory: RAW companion badges use safe same-folder stems without exposing RAW names', () => {
+  const photos = parsePhotoList({dirs:[
+    {name:'100RICOH', files:['R1.JPG','r1.dng','R1.PEF','R2.JPG','../R2.DNG']},
+    {name:'101RICOH', files:['R1.JPG','R2.DNG']}
+  ]});
+  assert.deepEqual(photos.find(p=>p.folder==='100RICOH' && p.name==='R1.JPG').rawCompanions, ['DNG','PEF']);
+  assert.equal(photos.find(p=>p.folder==='101RICOH').rawCompanions, undefined);
+  assert.equal(photos.find(p=>p.name==='R2.JPG').rawCompanions, undefined);
+  assert.equal(photos.length,3); assert.doesNotMatch(JSON.stringify(photos), /R2.DNG|r1.dng|R1.PEF/);
+});

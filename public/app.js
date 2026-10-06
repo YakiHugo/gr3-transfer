@@ -462,6 +462,7 @@ function renderGallery() {
     const detail = element('div');
     const title = element('h3', '', photo.name);
     title.title = photo.name;
+    if (photo.rawCompanions?.length) detail.append(element('p', 'photo-raw', 'JPEG + RAW · 仅传 JPEG'));
     detail.append(title, element('p', '', `${photo.folder} · ${bytes(photo.bytes)}`));
     meta.append(detail, element('span', 'photo-type', photo.synthetic ? '示例' : 'JPG'));
     card.append(preview, label, meta);
@@ -527,6 +528,8 @@ function showPreview(id) {
   state.previewId = id;
   $('preview-title').textContent = photo.name;
   $('preview-folder').textContent = photo.folder || '未知文件夹';
+  $('preview-raw').hidden = !photo.rawCompanions?.length;
+  $('preview-raw').textContent = photo.rawCompanions?.length ? `同一文件夹中还有同名 ${photo.rawCompanions.join(' / ')}。仅导入 JPEG，RAW 请使用读卡器。` : '';
   $('preview-size').textContent = bytes(photo.bytes);
   $('preview-dimensions').textContent = Number.isFinite(photo.width) && Number.isFinite(photo.height) ? `${photo.width} × ${photo.height} px` : '未提供';
   $('preview-date').textContent = dateLabel(photo.takenAt);
