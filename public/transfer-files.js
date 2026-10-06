@@ -73,6 +73,27 @@
     };
     return { receipt, blob: new Blob([`${JSON.stringify(receipt, null, 2)}\n`], { type: 'application/json' }), filename: `${downloadName(entry.photo)}.receipt.json` };
   }
+  async function buildBatchReceipt(entries, { signal, createdAt = new Date(), onProgress = () => {} } = {}) {
+    signal?.throwIfAborted();
+    if (!entries.length || entries.length > 48) throw new Error('每份批次校验清单需要 1 到 48 张已完成的原片。');
+    if (entries.reduce((sum, entry) => sum + (entry.blob?.size || 0), 0) > MAX_ARCHIVE_BYTES) throw new Error('批次超过 256 MiB 暂存上限。');
+    const sources = [...new Set(entries.map(entry => entry.sourceId))];
+    if (sources.some(source => typeof source !== 'string' || !source)) throw new Error('缺少传输来源标识，请重新传输。');
+    const paths = new Set(), files = [];
+    for (const [index, entry] of entries.entries()) {
+      signal?.throwIfAborted();
+      const sourceIndex = sources.indexOf(entry.sourceId) + 1;
+      const path = `${sourceIndex}/${components(entry.photo).join('/')}`.toLowerCase();
+      if (paths.has(path)) throw new Error('同一来源包含重复的照片路径。');
+      paths.add(path);
+      const result = await buildReceipt(entry, { signal, createdAt });
+      files.push({ ...result.receipt, source: { ...result.receipt.source, index: sourceIndex } });
+      onProgress(index + 1, entries.length);
+    }
+    signal?.throwIfAborted();
+    const receipt = { formatVersion: 1, createdAt: createdAt.toISOString(), photosIncluded: false, files };
+    return { receipt, blob: new Blob([`${JSON.stringify(receipt, null, 2)}\n`], { type: 'application/json' }), filename: `gr3-verification-${createdAt.toISOString().replace(/[-:]/g, '').slice(0, 15)}.json` };
+  }
   async function buildArchive(entries, { signal, createdAt = new Date(), onProgress = () => {} } = {}) {
     signal?.throwIfAborted();
     if (!entries.length) throw new Error('请先传输至少一张 JPEG，再进行打包。');
@@ -114,5 +135,5 @@
     signal?.throwIfAborted();
     return { blob: new Blob([...parts, ...central, end.bytes], { type: 'application/zip' }), filename: `gr3-originals-${createdAt.toISOString().replace(/[-:]/g, '').slice(0, 15)}.zip`, manifest };
   }
-  root.GRTransferFiles = Object.freeze({ downloadName, buildArchive, buildReceipt, crc32 });
+  root.GRTransferFiles = Object.freeze({ downloadName, buildArchive, buildReceipt, buildBatchReceipt, crc32 });
 })(globalThis);
