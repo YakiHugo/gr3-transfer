@@ -122,6 +122,8 @@ function updateControls() {
   $('transfer').disabled = blocked || !state.selected.size;
   $('mobile-transfer').disabled = blocked || !state.selected.size;
   $('clear-queue').disabled = blocked;
+  $('clear-handed').disabled = blocked;
+  $('clear-handed').hidden = !state.queue.some(entry => entry.status === 'handed-off' || entry.archiveHandedOff);
   $('select-batch').disabled = blocked || !state.session?.connected;
   $('retry-unfinished').disabled = blocked || !state.queue.some(canRetry);
   $('cancel-queue').hidden = !state.running;
@@ -159,6 +161,14 @@ function clearQueue() {
   state.queue.forEach(release);
   state.queue = [];
   renderQueue();
+}
+function clearHandedOff() {
+  if (state.busy || state.running || state.exporting || state.verifying) return;
+  const completed = state.queue.filter(entry => entry.status === 'handed-off' || entry.archiveHandedOff);
+  if (!completed.length || !window.confirm(`清理这 ${completed.length} 张临时原片前，请确认下载文件夹中的文件或 ZIP 已完整保存。浏览器接收下载请求不代表已写入磁盘。继续清理？`)) return;
+  invalidateArchive(); completed.forEach(release);
+  const removed = new Set(completed); state.queue = state.queue.filter(entry => !removed.has(entry));
+  renderQueue(); notify(`已清理 ${completed.length} 张已交给浏览器的临时原片，未保存项目仍保留。`);
 }
 function placeTray() {
   const connected = Boolean(state.session?.connected);
@@ -911,7 +921,7 @@ function saveArchive() {
   try {
     handoffDownload(state.archive.blob, state.archive.filename);
     state.archive.entries.forEach(entry => { entry.archiveHandedOff = true; });
-    updateUnloadGuard();
+    renderQueue();
     $('archive-status').textContent = `ZIP 已交给浏览器（${state.archive.count} 张原片）。请检查下载文件夹和校验清单，此处无法确认是否已写入磁盘。`;
   } catch (error) { $('archive-status').textContent = `未能将 ZIP 交给浏览器。${userError(error)}`; }
 }
@@ -945,6 +955,7 @@ $('transfer').addEventListener('click', addToQueue);
 $('mobile-transfer').addEventListener('click', () => { addToQueue(); if (state.queue.length) $('queue-panel').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' }); });
 $('cancel-queue').addEventListener('click', cancelQueue);
 $('clear-queue').addEventListener('click', clearQueue);
+$('clear-handed').addEventListener('click', clearHandedOff);
 $('retry-unfinished').addEventListener('click', () => retryEntries(state.queue));
 $('build-archive').addEventListener('click', prepareArchive);
 $('save-archive').addEventListener('click', saveArchive);
