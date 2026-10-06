@@ -118,6 +118,12 @@ public final class CoreTests {
         check(GalleryRules.filter(gallery,"missing").isEmpty(),"gallery search empty result");
         check(GalleryRules.filter(gallery,"  ").equals(gallery)&&gallery.size()==3,"empty search preserves inventory order without mutation");
         Locale priorLocale=Locale.getDefault();try{Locale.setDefault(Locale.forLanguageTag("tr-TR"));check(GalleryRules.filter(gallery,"RICOH").size()==3,"gallery search is locale independent");}finally{Locale.setDefault(priorLocale);}
+        check(GalleryRules.folders(gallery).equals(Map.of("100RICOH",1,"101RICOH",2)),"folder filter exposes exact JPEG counts");
+        check(GalleryRules.filter(gallery,"","101RICOH").size()==2,"exact folder filtering");
+        check(GalleryRules.filter(gallery,"R10","101RICOH").equals(List.of(gallery.get(1))),"folder and query combine");
+        check(GalleryRules.filter(gallery,"","101").isEmpty(),"folder filter does not match prefixes");
+        check(GalleryRules.filter(gallery,"","missing").isEmpty(),"unknown folder never broadens results");
+        check(GalleryRules.folders(List.of()).isEmpty(),"empty inventory folder counts");
         System.out.println("PASS "+tests+" native Android core assertions; no camera/network/device contacted");
     }
 }
