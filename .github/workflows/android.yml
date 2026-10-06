@@ -35,3 +35,30 @@ jobs:
             android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           if-no-files-found: error
           retention-days: 7
+  emulator:
+    needs: android
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GR3_DISPOSABLE_CI: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: gr-iii-transfer-android-debug
+          path: android/app/build/outputs/apk
+      - name: Run synthetic Android 10 UI, gallery tools and lifecycle checks
+        run: android/scripts/test-ci-emulator.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gr-iii-transfer-android-emulator-evidence
+          path: android/build/native-smoke
+          if-no-files-found: warn
+          retention-days: 7

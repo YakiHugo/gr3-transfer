@@ -7,13 +7,18 @@ public final class CameraRules {
     public static final long MAX_STAGED_BYTES = 256L * 1024 * 1024;
     public static final int MAX_JSON_BYTES = 8 * 1024 * 1024, MAX_ENTRIES = 48;
     private static final Pattern FOLDER = Pattern.compile("[A-Za-z0-9_-]{1,64}"), JPEG = Pattern.compile("[A-Za-z0-9_-]{1,64}\\.jpe?g", Pattern.CASE_INSENSITIVE);
+    public enum RawFormat { DNG, PEF }
     public static final class Photo {
         public final String folder, name, asset;
+        public final Set<RawFormat> rawFormats;
         public Photo(String folder, String name) throws TransferException { this(folder, name, null); }
-        public Photo(String folder, String name, String asset) throws TransferException {
+        public Photo(String folder, String name, String asset) throws TransferException { this(folder,name,asset,Collections.emptySet()); }
+        public Photo(String folder, String name, String asset, Collection<RawFormat> rawFormats) throws TransferException {
             if (!FOLDER.matcher(folder).matches() || !JPEG.matcher(name).matches()) throw new TransferException("已拒绝不安全的相机文件名。");
             this.folder = folder; this.name = name; this.asset = asset;
+            EnumSet<RawFormat> formats=EnumSet.noneOf(RawFormat.class);formats.addAll(rawFormats);this.rawFormats=Collections.unmodifiableSet(formats);
         }
+        public String rawLabel() { StringJoiner names=new StringJoiner(" / ");for(RawFormat format:rawFormats)names.add(format.name());return names.toString(); }
         public String key() { return folder + "/" + name; }
         public String originalPath() { return "/v1/photos/" + key(); }
         public String thumbnailPath() { return originalPath() + "?size=thumb"; }
@@ -38,7 +43,7 @@ public final class CameraRules {
     public static Inventory inventory(Object response) throws TransferException {
         Object dirs = object(response).get("dirs");
         if (!(dirs instanceof List)) throw new TransferException("无法识别相机照片列表，请重新连接后重试。");
-        Map<String,Photo> photos = new LinkedHashMap<>(); Set<String> seen = new HashSet<>();
+        Map<String,Photo> photos = new LinkedHashMap<>(); Map<String,Set<RawFormat>> rawPairs = new HashMap<>(); Set<String> seen = new HashSet<>();
         int raw = 0, other = 0, duplicate = 0, entries = 0;
         for (Object value : (List<?>) dirs) {
             Map<?,?> dir = object(value); Object folder = dir.get("name"), files = dir.get("files");
@@ -48,12 +53,23 @@ public final class CameraRules {
                 String name = (String) file, key = folder + "/" + name, lower = name.toLowerCase(Locale.ROOT);
                 if (!seen.add(key)) { duplicate++; continue; }
                 if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) { Photo photo = new Photo((String) folder, name); photos.put(key, photo); }
-                else if (lower.endsWith(".dng") || lower.endsWith(".pef")) raw++;
+                else if (lower.endsWith(".dng") || lower.endsWith(".pef")) {
+                    raw++;
+                    // Metadata only: never retain or request a RAW path, and never pair unsafe names.
+                    if(name.matches("[A-Za-z0-9_-]{1,64}\\.[dD][nN][gG]|[A-Za-z0-9_-]{1,64}\\.[pP][eE][fF]")) {
+                        String pair=folder+"/"+lower.substring(0,lower.lastIndexOf('.'));
+                        rawPairs.computeIfAbsent(pair,keyIgnored->EnumSet.noneOf(RawFormat.class)).add(lower.endsWith(".dng")?RawFormat.DNG:RawFormat.PEF);
+                    }
+                }
                 else other++;
                 if (photos.size() > 50000) throw new TransferException("存储卡中的 JPEG 超过 50,000 张，暂时无法读取。");
             }
         }
-        List<Photo> sorted = new ArrayList<>(photos.values());
+        List<Photo> sorted = new ArrayList<>();
+        for(Photo photo:photos.values()) {
+            String stem=photo.name.substring(0,photo.name.lastIndexOf('.')).toLowerCase(Locale.ROOT);
+            sorted.add(new Photo(photo.folder,photo.name,photo.asset,rawPairs.getOrDefault(photo.folder+"/"+stem,Collections.emptySet())));
+        }
         sorted.sort(Comparator.comparing((Photo p) -> p.folder).thenComparing(p -> p.name).reversed());
         return new Inventory(sorted, raw, other, duplicate);
     }

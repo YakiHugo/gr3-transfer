@@ -188,6 +188,17 @@ public final class CoreTests {
         check(removeTray.remove(removable.key,false)==TransferTray.RemoveResult.REMOVED,"failed entry without original removes without unsaved confirmation");
         removable=removeTray.admit(SESSION,List.of(photo),false).get(0);removable.status=TransferTray.Status.SAVED;removable.receipt=minimal;removable.savedUri="content://saved/unchanged";
         check(removeTray.remove(removable.key,false)==TransferTray.RemoveResult.REMOVED&&removable.savedUri.equals("content://saved/unchanged"),"saved item removal does not touch published URI");
+        CameraRules.Inventory paired=CameraRules.inventory(Map.of("dirs",List.of(
+            Map.of("name","100RICOH","files",List.of("R1.JPG","r1.dng","R1.PEF","R1.PEF","R2.JPG","R3.JPG","../R3.DNG","R3.JPG.DNG","R1-Different.DNG")),
+            Map.of("name","101RICOH","files",List.of("R1.JPG","R2.DNG")))));
+        CameraRules.Photo pairOne=paired.photos.stream().filter(p->p.key().equals("100RICOH/R1.JPG")).findFirst().orElseThrow();
+        check(pairOne.rawFormats.equals(Set.of(CameraRules.RawFormat.DNG,CameraRules.RawFormat.PEF))&&pairOne.rawLabel().equals("DNG / PEF"),"safe same-folder case-insensitive stems produce enum-only RAW labels");
+        check(paired.photos.stream().filter(p->!p.key().equals(pairOne.key())).allMatch(p->p.rawFormats.isEmpty()),"RAW pairing rejects other-folder, unsafe, suffix-spoofed and different stems");
+        check(paired.raw==6&&paired.duplicate==1&&paired.photos.size()==4,"RAW metadata preserves inventory exclusion and duplicate diagnostics");
+        check(pairOne.originalPath().equals("/v1/photos/100RICOH/R1.JPG")&&pairOne.thumbnailPath().endsWith("R1.JPG?size=thumb"),"paired photo still uses JPEG-only transport paths");
+        rejects(()->CameraRules.allowedUrl("/v1/photos/100RICOH/r1.dng"),"pairing never broadens RAW endpoint allowlist");
+        boolean immutablePair=false;try{pairOne.rawFormats.add(CameraRules.RawFormat.DNG);}catch(UnsupportedOperationException expected){immutablePair=true;}check(immutablePair,"RAW enum metadata is immutable");
+        check(photo.rawFormats.isEmpty()&&photo.rawLabel().isEmpty(),"ordinary and demo JPEGs have no invented RAW pair");
         System.out.println("PASS "+tests+" native Android core assertions; no camera/network/device contacted");
     }
 }

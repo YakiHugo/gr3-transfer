@@ -19,6 +19,10 @@ run_phase() {
   ! grep -q 'FAIL\|INSTRUMENTATION_FAILED' "build/native-smoke/$phase.txt"
 }
 run_phase smoke
+adb -s "$serial" shell am force-stop io.gr3.transfer
+run_phase tools
+adb -s "$serial" shell am force-stop io.gr3.transfer
+run_phase layout
 run_phase prepare-death
 adb -s "$serial" shell am force-stop io.gr3.transfer
 run_phase verify-death
