@@ -111,6 +111,13 @@ public final class CoreTests {
         PendingSave.save(journalError,()->new ByteArrayInputStream(MINIMAL),"original.jpg",false,minimal,new CancelToken());
         check(journalError.published==1&&journalError.deleted==0&&!journalError.journal.isEmpty(),"postpublish journal error preserves media");
         check(Arrays.equals(MINIMAL,new byte[]{(byte)255,(byte)216,(byte)255,(byte)192,0,11,8,0,1,0,1,1,1,0x11,0,(byte)255,(byte)218,0,8,1,1,0,0,63,0,1,(byte)255,(byte)217}),"save attempts never rewrite retained original");
+        List<CameraRules.Photo> gallery=List.of(new CameraRules.Photo("100RICOH","R2.JPG"),new CameraRules.Photo("101RICOH","R10.JPG"),new CameraRules.Photo("101RICOH","R1.JPEG"));
+        check(GalleryRules.filter(gallery," r10 ").equals(List.of(gallery.get(1))),"gallery filename search is trimmed and case insensitive");
+        check(GalleryRules.filter(gallery,"101ricoh").size()==2,"gallery search matches folder");
+        check(GalleryRules.filter(gallery,"101RICOH/R1").size()==2,"gallery search supports full source key");
+        check(GalleryRules.filter(gallery,"missing").isEmpty(),"gallery search empty result");
+        check(GalleryRules.filter(gallery,"  ").equals(gallery)&&gallery.size()==3,"empty search preserves inventory order without mutation");
+        Locale priorLocale=Locale.getDefault();try{Locale.setDefault(Locale.forLanguageTag("tr-TR"));check(GalleryRules.filter(gallery,"RICOH").size()==3,"gallery search is locale independent");}finally{Locale.setDefault(priorLocale);}
         System.out.println("PASS "+tests+" native Android core assertions; no camera/network/device contacted");
     }
 }
