@@ -1042,3 +1042,24 @@ test('DOM: queue status filters preserve batch totals and originals while showin
   assert.equal(h.$('#build-archive').disabled,false);
   h.change('#queue-filter','all'); assert.equal(h.all('.queue-item').length,6); assert.equal(h.$('#queue-empty-filter').hidden,true);
 });
+
+
+test('DOM: batch verification downloads only a manifest and never marks originals saved', async t => {
+  const h=await harness(t); await h.demo(); h.change('#folder','100RICOH'); h.click('#select-visible'); h.click('#transfer');
+  await until(()=>h.all('.queue-item[data-state="ready"]').length===6 && !h.$('#batch-receipt').disabled);
+  h.click('#batch-receipt'); await until(()=>h.saved.length===1);
+  assert.match(h.saved[0].filename,/^gr3-verification-.*\.json$/);
+  const receipt=JSON.parse(await h.saved[0].blob.text()); assert.equal(receipt.files.length,6);
+  assert.equal(h.all('.queue-item[data-state="ready"]').length,6); assert.equal(receipt.photosIncluded,false);
+});
+
+
+test('DOM: ZIP handoff immediately enables selective cleanup and updates status filters', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer');
+  await until(() => h.$('.queue-item')?.dataset.state === 'ready' && !h.$('#build-archive').disabled);
+  h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden);
+  h.click('#save-archive'); assert.equal(h.$('#clear-handed').hidden,false);
+  h.change('#queue-filter','ready'); assert.equal(h.all('.queue-item').length,0);
+  h.change('#queue-filter','handed'); assert.equal(h.all('.queue-item').length,1);
+  h.click('#clear-handed'); assert.equal(h.$('#queue-count').textContent,'0');
+});

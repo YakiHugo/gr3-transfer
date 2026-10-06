@@ -122,3 +122,17 @@ test('standalone receipt hashes retained originals without an archive or byte tr
   await assert.rejects(context.GRTransferFiles.buildReceipt(e, { signal: controller.signal }), { name: 'AbortError' });
   await assert.rejects(context.GRTransferFiles.buildReceipt(entry({ blob: new Blob([]) })), /先完成 JPEG 原片传输/);
 });
+
+
+test('batch receipt verifies all retained files without bundling bytes or source identifiers', async () => {
+  const e=entry(), result=await context.GRTransferFiles.buildBatchReceipt([e,entry({sourceId:'second-private-session'})]);
+  const receipt=JSON.parse(await result.blob.text()); assert.equal(receipt.photosIncluded,false);
+  assert.equal(receipt.files.length,2); assert.equal(receipt.files[0].sha256,hash(image));
+  assert.equal(receipt.files[1].source.index,2); assert.equal(receipt.files[0].source.index,1);
+  assert.doesNotMatch(await result.blob.text(), /second-private-session|synthetic-session|SYNTHETIC FIXTURE/);
+  assert.deepEqual(Buffer.from(await e.blob.arrayBuffer()),image);
+  await assert.rejects(context.GRTransferFiles.buildBatchReceipt([e,e]), /重复/);
+  await assert.rejects(context.GRTransferFiles.buildBatchReceipt([]), /1 到 48/);
+  const controller=new AbortController();
+  await assert.rejects(context.GRTransferFiles.buildBatchReceipt([e,entry({sourceId:'other'})],{signal:controller.signal,onProgress:()=>controller.abort()}),{name:'AbortError'});
+});

@@ -8,7 +8,7 @@ const QUEUE_LIMIT = 48;
 const MAX_ATTEMPTS = 3;
 const DOWNLOAD_GRACE_MS = 30000;
 const DOWNLOAD_LEASE_LIMIT = MEMORY_LIMIT + 1024 * 1024;
-const state = { session: null, photos: [], selected: new Set(), page: 1, busy: true, connecting: false, generation: 0, queue: [], running: false, pauseRequested: false, controller: null, previewId: null, retained: 0, requestController: new AbortController(), restoreClearedTray: false, verifying: false, receiptController: null, exporting: false, archive: null, archiveController: null, downloadLeases: new Map(), leasedBytes: 0 };
+const state = { session: null, photos: [], selected: new Set(), page: 1, busy: true, connecting: false, generation: 0, queue: [], running: false, pauseRequested: false, controller: null, previewId: null, retained: 0, requestController: new AbortController(), restoreClearedTray: false, verifying: false, batchVerifying: false, receiptController: null, exporting: false, archive: null, archiveController: null, downloadLeases: new Map(), leasedBytes: 0 };
 let entryId = 0;
 let unloadGuardActive = false;
 // Reuse locale collation and one derived list, rather than sorting the whole card
@@ -114,6 +114,8 @@ function updateControls() {
   const blocked = state.busy || state.running || state.exporting || state.verifying;
   for (const id of ['landing-connect', 'try-demo', 'switch-camera', 'refresh', 'confirm-connect']) $(id).disabled = blocked;
   $('disconnect').disabled = state.busy || state.exporting || state.verifying;
+  $('batch-receipt').disabled = !state.batchVerifying && (blocked || !state.queue.some(entry => entry.blob));
+  $('batch-receipt').textContent = state.batchVerifying ? '取消批次校验' : '导出批次校验清单';
   $('build-archive').disabled = blocked || !state.queue.some(entry => entry.blob);
   $('build-archive').hidden = state.exporting;
   $('save-archive').hidden = !state.archive;
@@ -642,6 +644,27 @@ async function verifyOriginal(entry) {
     if (state.receiptController === controller) { state.verifying = false; state.receiptController = null; renderQueue(); }
   }
 }
+async function exportBatchReceipt() {
+  if (state.batchVerifying) { state.receiptController?.abort(); return; }
+  if (state.busy || state.running || state.exporting || state.verifying) return;
+  const entries = state.queue.filter(entry => entry.blob);
+  if (!entries.length) return;
+  const generation = state.generation, controller = new AbortController();
+  state.batchVerifying = true; state.verifying = true; state.receiptController = controller;
+  $('batch-receipt-status').textContent = '正在校验原片…'; renderQueue();
+  try {
+    const result = await GRTransferFiles.buildBatchReceipt(entries, { signal: controller.signal, onProgress: (done, total) => {
+      if (generation === state.generation) $('batch-receipt-status').textContent = `已校验 ${done} / ${total} 张`;
+    } });
+    if (generation !== state.generation || controller.signal.aborted) return;
+    handoffDownload(result.blob, result.filename);
+    $('batch-receipt-status').textContent = `已将 ${entries.length} 张原片的校验清单交给浏览器。清单不包含照片，请另行保存原片。`;
+  } catch (error) {
+    if (generation === state.generation) $('batch-receipt-status').textContent = controller.signal.aborted ? '已取消校验，原片仍可保存。' : userError(error);
+  } finally {
+    if (state.receiptController === controller) { state.receiptController = null; state.verifying = false; state.batchVerifying = false; renderQueue(); }
+  }
+}
 function itemStatus(entry) {
   if (entry.status === 'queued') return '等待传输';
   if (entry.status === 'transferring') return `${bytes(entry.received)}${knownSize(entry.expected) ? ` / ${bytes(entry.expected)}` : ' 已传输 · 总大小未知'} · ${transferTiming(entry)}`;
@@ -978,6 +1001,7 @@ $('queue-filter').addEventListener('change', renderQueue);
 $('clear-queue').addEventListener('click', clearQueue);
 $('clear-handed').addEventListener('click', clearHandedOff);
 $('retry-unfinished').addEventListener('click', () => retryEntries(state.queue));
+$('batch-receipt').addEventListener('click', exportBatchReceipt);
 $('build-archive').addEventListener('click', prepareArchive);
 $('save-archive').addEventListener('click', saveArchive);
 $('cancel-archive').addEventListener('click', () => state.archiveController?.abort());
@@ -1000,7 +1024,7 @@ function suspendPage() {
   state.controller?.abort();
   state.archiveController?.abort();
   state.receiptController?.abort();
-  state.receiptController = null; state.verifying = false;
+  state.receiptController = null; state.verifying = false; state.batchVerifying = false;
   state.exporting = false;
   invalidateArchive();
   state.requestController.abort();
