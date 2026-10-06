@@ -1,0 +1,38 @@
+name: Build portable desktop previews
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['src/**', 'public/**', 'fixtures/**', 'scripts/*desktop.mjs', '.github/workflows/desktop-preview.yml']
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run check
+      - name: Package included Node runtime and local app
+        run: node scripts/package-desktop.mjs
+      - name: Smoke-test packaged runtime, disconnected startup and synthetic original bytes
+        run: node scripts/smoke-desktop.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: camera-transfer-${{ matrix.os }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 30

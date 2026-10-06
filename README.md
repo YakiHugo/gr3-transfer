@@ -1,12 +1,12 @@
-# GR III Transfer
+# GR Relay · 相机原片传输
 
-A small, self-hostable **Ricoh GR III** JPEG-transfer prototype: browse a contact sheet, select originals, transfer with progress, and save them through your browser. The camera's JPEG rendering, EXIF and other bytes are passed through unchanged.
+连接理光 GR III，浏览、选片，再保存完整 JPEG 原片。界面默认使用简体中文，照片在本机处理，不上传到服务器。
 
-**Status:** a working local prototype with synthetic fixtures and a community-protocol adapter. **No physical camera, Mac or phone has been tested.** This is not a Ricoh product or an official API client.
+> **测试版本**：目前仅支持型号明确为 **RICOH GR III** 的相机。尚未使用真实 GR III、Mac 或 Android 手机验证。演示图片是生成的测试素材，不是真实相机照片。本项目与理光官方无关联。
 
-## Run
+## 电脑端
 
-Requires Node.js 22 or newer. No runtime packages, account, API key, build step or Internet connection are needed.
+需要 Node.js 22 或以上版本。运行应用不需要安装依赖、账号或 API 密钥。
 
 ```sh
 git clone https://github.com/YakiHugo/gr3-transfer.git
@@ -14,112 +14,72 @@ cd gr3-transfer
 npm start
 ```
 
-Open **http://127.0.0.1:4317** on the same computer. The app starts disconnected. **Try demo** uses 12 generated geometric JPEGs, never your photos. To use a different local port: `PORT=4318 npm start`.
+在运行程序的电脑上打开 **http://127.0.0.1:4317**。
 
-## Connect a GR III
+1. 在 GR III 上打开无线局域网
+2. 在这台电脑的系统 Wi-Fi 设置中加入相机网络，没有互联网也可以使用
+3. 回到网页，选择「连接相机」
+4. 选择照片，点击「传输原片」
+5. 传输完成后逐张「保存」，或「打包为 ZIP」再保存
+6. 在浏览器的下载文件夹中确认照片已保存，再关闭页面
 
-1. Start the bridge on the computer you want to receive the photos.
-2. Turn on the GR III's wireless LAN and join its Wi-Fi network through your computer's normal Wi-Fi settings. Use the network/password shown by your camera. This network may have no Internet access.
-3. Keep the camera awake and close other apps communicating with it.
-4. In the local browser page, choose **Connect GR III**. The bridge checks the device model and lists JPEGs.
-5. Browse/select images, transfer selected originals, then use each file's **Save** button or **Prepare ready JPEGs as ZIP → Save ZIP**. Confirm the files appear in your browser's Downloads destination. The app cannot verify that the browser saved them to disk.
+「先试试看」可体验 12 张生成的示例图片，不会连接相机。「筛选与排序」「存储卡与格式信息」和「文件校验」默认收起，需要时再展开。
 
-Only an exact normalized `RICOH GR III` device identity is accepted. IIIx, IV and other cameras are intentionally outside this prototype. Unknown firmware response shapes fail with a visible error. No automatic Wi-Fi/Bluetooth configuration is attempted.
+### 下载与暂存
 
-## What is implemented
+- 保留相机 JPEG 原始字节，不缩放、不重压缩、不改写 EXIF
+- ZIP 保留相机文件夹与文件名，附带 SHA-256 校验清单
+- 浏览器接收下载请求不等于已成功写入磁盘，请检查下载文件夹
+- 断开相机后，已完成的原片仍可保存；清空、刷新或关闭页面会丢弃临时内容
+- 失败或取消的传输可手动重试，每张从头开始，最多尝试三次
+- 同时最多保留 48 项、256 MiB，每张原片上限 128 MiB，请按需分批
 
-- Responsive desktop/phone-width gallery, previews, selection and filters; cached numeric sorting keeps selection and page changes from re-sorting the full card
-- Explicit disconnected, synthetic-demo and real-camera modes
-- Read-only Wi-Fi adapter, filename filtering and sequential camera reads
-- Original JPEG transfers without resizing, conversion or EXIF rewriting
-- Per-file progress, cancellation and manual retry; **Retry unfinished** recovers eligible failed/cancelled files in one action while keeping ready JPEGs
-- Disconnect during a batch cancels incomplete transfers while keeping completed originals available in this tab
-- Individual saves identify the camera folder; batch ZIPs preserve folder/filename structure and include a SHA-256 manifest
-- Byte-length and incremental JPEG marker validation before a transfer completes
-- Synthetic original/thumbnail fixtures and automated regression tests
-- All application assets served locally, with no external analytics or font requests
+网页只监听本机的 `127.0.0.1`。手机不能通过自己的 localhost 连接另一台电脑，不提供开放局域网、隧道或二维码配对。
 
-## Phone scope
+### 免安装依赖的桌面预览包
 
-The layout adapts to a phone screen. **A real phone cannot reach a bridge bound to another computer's localhost.** This version deliberately binds only to `127.0.0.1`; it does not expose LAN access, create a tunnel or configure a firewall. A separately reviewed/authorized LAN or native-phone path is still needed for real phone transfers. No QR pairing is faked. Mobile file downloads also depend on the browser; saving to Files/Downloads is distinct from importing into Photos.
+仓库的「Build portable desktop previews」工作流可生成 macOS Apple Silicon / Intel 独立包。每个包内包含 Node 运行时，解压后双击 `Start Camera Transfer.command` 即可启动，保存照片前请保持终端开启。
 
-## Original JPEG guarantee and limits
+这是**未签名、未公证**的测试包。遇到系统安全拦截时不要绕过保护。打包与命令行冒烟测试不等同于真实 Mac、浏览器和相机联调。
 
-Original requests use `/v1/photos/{folder}/{filename}` with **no `size` query**. Gallery thumbnails use `?size=thumb`; larger previews use `?size=view`. Byte-preservation tests compare hashes and embedded fixture metadata, including split HTTP chunks. The bridge does not recompress, rotate, strip metadata, apply looks or convert RAW. Any camera look already baked into the original JPEG stays in those bytes.
+## Android 原生测试应用
 
-Marker validation detects incomplete segments, missing frame/scan markers and false end markers inside EXIF thumbnails. It is not a full entropy decoder, a cryptographic camera-origin guarantee or proof of an actual camera transfer. There is no camera-provided checksum available in the researched API. A 128 MiB per-file limit protects memory/resource use; failed/cancelled transfers restart from the beginning. HTTP Range/resume support is not assumed.
+独立的 Android 10 及以上原生应用直接使用手机已连接的相机 Wi-Fi，不依赖电脑或网页。
 
-Browser transfer status is local to this tab, not the camera's official transfer flag or a durable backup index. Completed originals survive disconnect and reconnect in the same tab. Clear, closing/reloading the tab, or Back/Forward restoration discards the in-memory tray; save first.
+- 选片后先传输到应用临时空间，再明确确认「保存到相册」
+- 新文件保存到 Pictures 后，回读并核对 SHA-256，再对相册可见
+- 不读取整个照片库、不请求定位或蓝牙权限，也不自动更改 Wi-Fi
+- 不覆盖已有照片；失败时清理本次尚未发布的临时照片
+- 系统或相册已启用的云备份可能上传保存后的照片，应用本身不会上传
 
-If a batch is interrupted, restore camera Wi-Fi on the bridge computer, then choose **Retry unfinished (N)** in the transfer tray. This explicitly retries both failed and cancelled entries from the current connection; each file restarts from the beginning. Ready JPEGs and files already handed to the browser are kept. The tray shows failed/cancelled counts and explains entries that need another action. Individual **Retry** still retries only that one frame. Each entry has at most three attempts; stale source URLs and older connections are never silently reused. After using Disconnect or switching sources, reconnect and reselect missing frames from the current contact sheet. Retrying invalidates a previously prepared partial ZIP, so prepare a new ZIP after recovery.
+构建、测试记录和设备限制请看 [Android 说明](android/README.md)。
 
-Individual JPEG downloads include an unambiguous folder prefix, for example `8-100RICOH__R0000001.JPG`. ZIPs retain `100RICOH/R0000001.JPG`; if the tray contains multiple connection sessions, ZIPs add `source-01/`, `source-02/`, etc. Camera file IDs are scoped to a connection so a new camera/card session does not silently reuse an earlier file. Old interrupted transfers require reconnecting and reselecting the current source file. This prototype does not silently overwrite a chosen filesystem directory or remove anything from the camera.
+## 支持范围与安全
 
-## Batch ZIP and verification
+- 仅 JPEG；JPEG+RAW 只显示和传输 JPEG，不转换 `.DNG` / `.PEF`
+- 暂不支持 GR IIIx、GR IV 或其他型号
+- 固定相机地址 `http://192.168.0.1`，仅允许读取型号、照片列表、缩略图、预览和原片
+- 不删除相机文件，不拍摄，不修改相机设置、传输标志或固件
+- 所有界面资源都随应用提供，无外部字体、分析脚本或云端照片路径
+- 非官方社区协议，可能受固件版本影响；SHA-256 只能证明已接收字节一致，无法替代读卡器原片对比
 
-Transfer first, then choose **Prepare ready JPEGs as ZIP**. Preparation never contacts the camera: it packages only completed JPEGs already held in this tab. Choose **Save ZIP** explicitly after preparation. Individual Save remains available if packaging or checksum support is unavailable.
-
-The ZIP uses uncompressed storage and includes `transfer-manifest.json` with each archived path, byte length and SHA-256. Those hashes identify the retained browser bytes. They are not independently measured camera checksums and cannot prove the browser saved to disk. After extracting an archive, compare an extracted JPEG against its manifest entry with an OS checksum tool; compare against a card-reader copy to validate the complete real-camera path.
-
-Bounds: at most 48 tray entries, 128 MiB per JPEG and 256 MiB of retained JPEG data. ZIP generation checks bounds before reading payloads, processes files sequentially, and yields during CRC work so cancellation can run. The working buffer can add up to one JPEG's size, and browser Blob/ZIP overhead can increase actual process memory beyond the retained-data cap. Use smaller batches on memory-limited devices. Cancel preserves ready originals; Clear releases tray/preview URLs. A separate browser-download URL stays valid for 30 seconds after a Save click so immediate Clear/Remove cannot invalidate an asynchronous download. These short-lived links have a separate 257 MiB aggregate cap, are reused for repeated saves of the same Blob, and count against further transfer admission. This can briefly require waiting before another large batch. ZIP dates represent archive creation, while the JPEG's embedded EXIF bytes remain unchanged.
-
-## Safety
-
-- Fixed camera target: `http://192.168.0.1`; no generic proxy or user-configurable URL
-- Allowlisted GET reads only: camera properties, full photo list, original/preview/thumbnail JPEGs
-- No deletion, capture, power-off, transfer-flag writes, firmware or camera-setting changes
-- Loopback binding with strict Host, Origin, fetch-site, CSRF, CSP and no-store controls
-- No redirects from camera responses; unexpected response encodings are rejected
-- Only safe camera properties are exposed. Wi-Fi keys, GPS, serials and MAC addresses are not returned/logged
-- JPEGs stream through memory and are not written to bridge storage or uploaded anywhere
-- Disconnect/reconnect invalidates old download URLs and cancels queued camera reads
-
-This local prototype is not a hardened multi-user or Internet-facing service. Its current protections intentionally reject remote use. Do not change the bind address to work around them.
-
-## Verify
+## 验证
 
 ```sh
-npm run test:core           # no packages needed
-npm ci --ignore-scripts      # installs dev-only DOM test dependency
-npm test
-npm run check
+npm ci --ignore-scripts
+npm run check                         # 协议、原片字节、DOM 交互：129 项
+node scripts/benchmark-gallery.mjs    # 50,000 张合成照片的筛选与排序
+android/scripts/test-core.sh          # 无 SDK 的 Android 核心契约
+node android/scripts/audit-source.mjs # 网络与存储安全静态检查
 ```
 
-For a repeatable 50,000-frame synthetic gallery derivation benchmark, run `node scripts/benchmark-gallery.mjs`. This measures filtering/sorting only, not camera throughput or browser rendering.
+真实 Chromium 验证使用同一份本机应用和合成图片，检查中文界面、窄屏溢出、取消/重试、保存的原始字节，并生成截图：
 
-Tests use injected fake camera responses and local synthetic files. They never contact `192.168.0.1`. Happy DOM is a pinned development-only dependency for interaction tests, not a real-browser or visual test. Starting the app does not require installing it. See [docs/verification.md](docs/verification.md) for completed checks and the pending hardware checklist.
+```sh
+npx playwright install chromium
+npm run test:browser
+```
 
-## Protocol evidence
+「Verify Chinese browser UI」工作流保留截图与 `verification.json`。当前本地沙箱限制 Chromium 启动，**未把本地 DOM 检查计作浏览器视觉通过**；须查看该提交对应的 CI 结果。测试不会访问真实相机地址。
 
-Ricoh officially documents GR III support and wireless-LAN image import in [GR WORLD](https://www.ricoh-imaging.co.jp/english/products/app/gr-world/). It does **not** document this HTTP API.
-
-The adapter was independently written using these read-only references, researched October 1, 2026:
-
-- [Community OpenAPI specification](https://github.com/CursedHardware/ricoh-wireless-protocol/blob/main/openapi.yaml): `/v1/props`, directory/file-string listing and original/thumbnail request shapes
-- [GRsync implementation](https://github.com/clyang/GRsync/blob/master/GRsync.py): explicit GR III support and original downloads without a size parameter
-- [Requested feasibility reference](https://github.com/Nielk74/ricoh-gr3-android/blob/main/research/FEASIBILITY.md): orientation and references, not hardware validation of this prototype
-
-The unofficial protocol may differ by firmware. No external repository code was executed. Photo transfers use Wi-Fi, not Bluetooth. List pagination is not guessed: this version requests the full directory listing and filters JPEGs locally; the published `after` field is a date-time filter, not a verified filename cursor.
-
-### Protecting unsaved originals
-
-Clear and Remove ask before discarding retained originals that have not been
-handed to the browser individually or in a saved ZIP. Cancelling that prompt
-preserves both the files and any prepared archive. An active transfer or retained
-unhanded original also requests the browser's normal leave-page warning; browsers
-may suppress it, especially on mobile. It is not durable storage. Save explicitly
-and check Downloads/Files before closing the page. A browser handoff suppresses
-repeat warnings but still is not proof that a file reached disk.
-
-### Verify a JPEG without preparing a ZIP
-
-For a ready original, choose **Verify original bytes**, then **Save verification
-receipt**. The JSON receipt contains its camera folder/name, individual download
-filename, byte length and SHA-256 of the retained original. Compare that hash
-with the JPEG you actually saved using an OS checksum tool. Verification reads
-only the bytes already in this tab and does not contact the camera, decode or
-rewrite the JPEG. Cancelling keeps the original. Only one verification runs at
-a time; its temporary hashing buffer can add up to one original's size.
-
-Saving a receipt does not save its JPEG or suppress the unsaved-original warning.
-The receipt cannot prove camera origin or that Downloads contains the file.
+更多资料：[验证范围与硬件清单](docs/verification.md) · [协议、字节保证与完整技术说明](docs/technical-design.md) · [中断恢复](docs/batch-recovery.md)

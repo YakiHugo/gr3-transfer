@@ -27,7 +27,7 @@
   }
   function components(photo) {
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(photo.folder) || !/^[A-Za-z0-9_-]{1,64}\.jpe?g$/i.test(photo.name)) {
-      throw new Error('This file has an unsafe camera folder or filename.');
+      throw new Error('照片文件夹或文件名未通过安全检查。');
     }
     return [photo.folder, photo.name];
   }
@@ -56,9 +56,9 @@
   async function buildReceipt(entry, { signal, createdAt = new Date() } = {}) {
     signal?.throwIfAborted();
     const [folder, name] = components(entry.photo);
-    if (!entry.blob || entry.blob.type !== 'image/jpeg' || !entry.blob.size || entry.blob.size > 128 * 1024 * 1024) throw new Error('A retained original JPEG is required for verification.');
-    if (!root.crypto?.subtle) throw new Error('Checksum support is unavailable. The original can still be saved.');
-    if (!Number.isFinite(createdAt.getTime())) throw new Error('Invalid receipt date.');
+    if (!entry.blob || entry.blob.type !== 'image/jpeg' || !entry.blob.size || entry.blob.size > 128 * 1024 * 1024) throw new Error('请先完成 JPEG 原片传输，再进行校验。');
+    if (!root.crypto?.subtle) throw new Error('浏览器不支持校验，原片仍可保存。');
+    if (!Number.isFinite(createdAt.getTime())) throw new Error('校验记录日期无效。');
     const bytes = await entry.blob.arrayBuffer();
     signal?.throwIfAborted();
     const digest = await root.crypto.subtle.digest('SHA-256', bytes);
@@ -75,23 +75,23 @@
   }
   async function buildArchive(entries, { signal, createdAt = new Date(), onProgress = () => {} } = {}) {
     signal?.throwIfAborted();
-    if (!entries.length) throw new Error('Transfer at least one JPEG before creating an archive.');
-    if (entries.length > 48) throw new Error('An archive is limited to 48 transferred JPEGs.');
-    if (!root.crypto?.subtle) throw new Error('Checksum support is unavailable. Save JPEGs individually or use a current desktop browser.');
-    if (!Number.isFinite(createdAt.getTime())) throw new Error('Invalid archive date.');
+    if (!entries.length) throw new Error('请先传输至少一张 JPEG，再进行打包。');
+    if (entries.length > 48) throw new Error('每个压缩包最多包含 48 张原片。');
+    if (!root.crypto?.subtle) throw new Error('浏览器不支持校验，可逐张保存原片，或使用较新的桌面浏览器。');
+    if (!Number.isFinite(createdAt.getTime())) throw new Error('压缩包日期无效。');
     const total = entries.reduce((n, entry) => n + (entry.blob?.size || 0), 0);
-    if (total > MAX_ARCHIVE_BYTES) throw new Error('Archive exceeds the 256 MiB transfer-tray limit.');
+    if (total > MAX_ARCHIVE_BYTES) throw new Error('压缩包超过 256 MiB 暂存上限。');
     const sources = [...new Set(entries.map(entry => entry.sourceId))];
-    if (sources.some(id => typeof id !== 'string' || !id)) throw new Error('A transfer has no source-session identity.');
+    if (sources.some(id => typeof id !== 'string' || !id)) throw new Error('缺少传输来源标识，请重新传输。');
     const stamp = dosTime(createdAt), parts = [], central = [], files = [], paths = new Set();
     let offset = 0;
     for (const [index, entry] of entries.entries()) {
       signal?.throwIfAborted();
       const [folder, name] = components(entry.photo);
-      if (!entry.blob || entry.blob.type !== 'image/jpeg' || !entry.blob.size || entry.blob.size > 128 * 1024 * 1024) throw new Error('A transferred JPEG is missing or outside the supported size limit.');
+      if (!entry.blob || entry.blob.type !== 'image/jpeg' || !entry.blob.size || entry.blob.size > 128 * 1024 * 1024) throw new Error('暂存的 JPEG 已失效或超过大小限制。');
       const sourceIndex = sources.indexOf(entry.sourceId) + 1;
       const path = `${sources.length > 1 ? `source-${String(sourceIndex).padStart(2, '0')}/` : ''}${folder}/${name}`;
-      if (paths.has(path.toLowerCase())) throw new Error('Two transferred files would use the same archive path. Remove one before saving the archive.');
+      if (paths.has(path.toLowerCase())) throw new Error('两张照片使用了相同的压缩包路径，请先移除其中一项。');
       paths.add(path.toLowerCase());
       const bytes = new Uint8Array(await entry.blob.arrayBuffer());
       signal?.throwIfAborted();

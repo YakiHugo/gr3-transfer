@@ -1,0 +1,197 @@
+package io.gr3.transfer;
+import android.app.*;
+import android.content.*;
+import android.content.pm.ActivityInfo;
+import android.graphics.Bitmap;
+import android.os.*;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.widget.*;
+import io.gr3.transfer.core.*;
+import java.io.*;
+import java.util.*;
+/** Dependency-free device/emulator instrumentation. Uses synthetic fixtures only. */
+public final class NativeSmokeInstrumentation extends Instrumentation {
+    private MainActivity activity;
+    private TransferController controller;
+    private int assertions;
+    private String phase = "smoke";
+    private final List<String> createdMedia = new ArrayList<>();
+    @Override public void onCreate(Bundle args) { super.onCreate(args); if(args!=null)phase=args.getString("phase","smoke"); start(); }
+    @Override public void onStart() {
+        Bundle result = new Bundle();
+        try {
+            activity = (MainActivity) startActivitySync(new Intent(getTargetContext(), MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            controller = ((TransferApplication) activity.getApplication()).controller;
+            waitForIdleSync();
+            if(!phase.equals("smoke")) {
+                runOnMainSync(()->controller.connect(true));awaitIdle();
+                if(phase.equals("layout"))verifyLayout();else if(phase.equals("prepare-death"))prepareProcessDeath();else if(phase.equals("verify-death"))verifyProcessDeath();else throw new AssertionError("Unknown phase");
+                result.putString("stream","PASS "+assertions+" Android process-lifecycle assertions: "+phase+"\n");finish(Activity.RESULT_OK,result);return;
+            }
+            screenshot("01-onboarding");
+            check(!controller.connected, "starts disconnected");
+            runOnMainSync(()->{
+                View root=activity.getWindow().getDecorView();
+                check(find(root,"把原片带回手机")!=null&&find(root,"连接 GR III")!=null,"onboarding primary actions are Chinese");
+                check(find(root,"导入记录（0）")==null,"empty disconnected onboarding hides tabs");
+                check(!collectText(root).contains("SHA-256"),"onboarding keeps diagnostics secondary");
+            });
+            click("试用演示照片"); awaitIdle();
+            synchronized(controller) { check(controller.demo && controller.connected && controller.inventory.photos.size()==12,"synthetic demo connects with twelve fixtures"); }
+            runOnMainSync(()->check(find(activity.getWindow().getDecorView(),"照片").isSelected(),"Camera tab has selected accessibility state"));
+            String selectedSource=controller.session;click("更多");clickDialog("取消");
+            check(controller.connected&&selectedSource.equals(controller.session),"dismissing connection options preserves source");
+            click("加载预览"); awaitIdle();
+            synchronized(controller) { check(controller.thumbnails.size()==12,"native thumbnail reads"); }
+            runOnMainSync(()->{
+                check(find(activity.getWindow().getDecorView(),"上一页")==null&&find(activity.getWindow().getDecorView(),"下一页")==null,"single-page gallery hides page navigation");
+                ImageView first=firstImage(activity.getWindow().getDecorView());android.graphics.Rect visible=new android.graphics.Rect();
+                check(first!=null&&first.getGlobalVisibleRect(visible)&&visible.height()>=140,"first thumbnail is visible above the fold");
+            });
+            screenshot("02-demo-gallery");
+            click("全选本页");
+            runOnMainSync(()->{
+                View action=find(activity.getWindow().getDecorView(),"导入原片（12）");
+                android.graphics.Rect visible=new android.graphics.Rect();
+                check(action!=null&&action.getGlobalVisibleRect(visible)&&visible.height()>=48,"import action stays visible outside scrolling gallery");
+                check(!insideScroll(action),"primary import action is docked outside scroll view");
+            });
+            click("取消本页全选");
+            runOnMainSync(()->check(find(activity.getWindow().getDecorView(),"选择要导入的照片")!=null,"deselect page restores empty primary action"));
+            click("全选本页");
+            click("导入原片（12）"); awaitIdle();
+            synchronized(controller) { check(controller.entries().size()==12,"all selected originals enter tray"); for(TransferTray.Entry e:controller.entries())check(e.status==TransferTray.Status.READY&&e.receipt!=null,"validated original ready"); }
+            runOnMainSync(()->check(find(activity.getWindow().getDecorView(),"导入记录（12）").isSelected(),"Transfers tab has selected accessibility state"));
+            runOnMainSync(()->{
+                String text=collectText(activity.getWindow().getDecorView());
+                check(text.contains("原片已就绪")&&text.contains("临时空间"),"ready originals have explicit unsaved warning");
+                check(!text.contains("SHA-256")&&!text.contains("source "),"ready list hides hashes and source diagnostics");
+            });
+            click("详情");
+            check(dialogContains("SHA-256"),"hash is available in secondary Chinese details");
+            clickDialog("关闭");
+            screenshot("03-ready-originals");
+            check(getUiAutomation().performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK),Build.VERSION.SDK_INT>=33?"native predictive-back action":"legacy native-back action");
+            clickDialog("继续使用");
+            check(!activity.isFinishing(),"unsaved-original back warning retains activity");
+            click("保存到相册（12）");
+            check(dialogContains("云备份")&&dialogContains("EXIF")&&dialogContains("不会覆盖"),"Chinese save confirmation discloses metadata, backup and existing-photo protection");
+            clickDialog("取消");
+            synchronized(controller) { check(controller.entries().stream().allMatch(e->e.status==TransferTray.Status.READY&&e.savedUri==null),"declined save retains ready originals"); }
+            click("保存到相册（12）"); clickDialog("确认保存"); awaitIdle();
+            synchronized(controller) {
+                for(TransferTray.Entry e:controller.entries()) {
+                    check(e.status==TransferTray.Status.SAVED&&e.savedUri!=null,"actual MediaStore save publishes");createdMedia.add(e.savedUri);
+                    try(InputStream in=getTargetContext().getContentResolver().openInputStream(android.net.Uri.parse(e.savedUri))) {
+                        OriginalCopy.Receipt read=OriginalCopy.inspect(in,e.receipt.bytes,new CancelToken());check(read.sha256.equals(e.receipt.sha256),"actual saved original readback hash");
+                    }
+                }
+            }
+            runOnMainSync(()->{
+                String text=collectText(activity.getWindow().getDecorView());
+                check(text.contains("已保存到相册")&&text.contains("12 张原片"),"save completion is explicit in Chinese");
+                check(!text.contains("SHA-256")&&find(activity.getWindow().getDecorView(),"继续选片")!=null,"saved screen remains concise with a clear next action");
+            });
+            screenshot("04-saved-pictures");
+            // Rotation recreates the Activity but not the Application's retained tray.
+            ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);
+            runOnMainSync(()->activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
+            Activity rotated=waitForMonitorWithTimeout(monitor,60000);removeMonitor(monitor);
+            check(rotated!=null&&rotated!=activity,"rotation recreates the native Activity");
+            activity=(MainActivity)rotated;
+            waitForIdleSync();
+            synchronized(controller){check(controller.entries().size()==12&&controller.entries().stream().allMatch(e->e.savedUri!=null),"rotation retains completed tray");}
+            screenshot("05-rotated-tray");
+            runOnMainSync(()->{controller.clear();controller.connect(true);});awaitIdle();
+            Set<String> keys=new LinkedHashSet<>();synchronized(controller){for(CameraRules.Photo photo:controller.inventory.photos)keys.add(photo.key());}
+            runOnMainSync(()->{controller.transfer(keys);controller.cancel();});awaitIdle();
+            synchronized(controller){check(controller.entries().stream().noneMatch(e->e.status==TransferTray.Status.QUEUED||e.status==TransferTray.Status.TRANSFERRING),"cancel settles queue");}
+            runOnMainSync(controller::retry);awaitIdle();
+            synchronized(controller){check(controller.entries().stream().allMatch(e->e.status==TransferTray.Status.READY),"manual retry recovers unfinished synthetic originals");}
+            runOnMainSync(controller::disconnect);waitForIdleSync();
+            synchronized(controller){check(!controller.connected&&controller.entries().stream().allMatch(e->e.status==TransferTray.Status.READY),"disconnect retains ready originals");}
+            click("更多");clickDialog("清空导入记录");clickDialog("保留原片");
+            synchronized(controller){check(controller.hasUnsaved(),"declined clear preserves private originals");}
+            click("更多");clickDialog("清空导入记录");clickDialog("清除临时副本");waitForIdleSync();
+            synchronized(controller){check(controller.entries().isEmpty(),"clear removes only private tray");}
+            cleanupCreatedMedia();
+            result.putString("stream","PASS "+assertions+" native Android API/UI assertions. Synthetic demo only; no physical camera contacted.\n");
+            result.putInt("assertions",assertions);finish(Activity.RESULT_OK,result);
+        } catch(Throwable failure) {
+            try{screenshot("failure");}catch(Exception ignored){}
+            cleanupCreatedMedia();
+            result.putString("stream","FAIL after "+assertions+" assertions: "+failure+"\n"+android.util.Log.getStackTraceString(failure));finish(Activity.RESULT_CANCELED,result);
+        } finally {
+            cleanupCreatedMedia();
+        }
+    }
+    private void verifyLayout()throws Exception {
+        runOnMainSync(()->controller.loadThumbnails(controller.inventory.photos));awaitIdle();
+        CameraRules.Photo first=controller.inventory.photos.get(0);
+        click(first.name);
+        runOnMainSync(()->{
+            View root=activity.getWindow().getDecorView(),action=find(root,"导入原片（1）");
+            android.graphics.Rect rect=new android.graphics.Rect();
+            check(action!=null&&action.getGlobalVisibleRect(rect)&&rect.height()>=48,"layout keeps selected import action fully visible");
+            check(!insideScroll(action),"layout primary action is independent of scroll");
+            check(find(root,"照片").isSelected(),"layout preserves selected tab state");
+            View label=find(root,first.name);
+            boolean grid=activity.getResources().getConfiguration().screenWidthDp>=360&&activity.getResources().getConfiguration().fontScale<=1.15f;
+            check(grid?label.getWidth()<root.getWidth()/2:label.getWidth()>root.getWidth()/2,"gallery columns adapt to screen width and font size");
+            check(!collectText(root).contains("SHA-256"),"layout leaves technical diagnostics secondary");
+        });
+        screenshot("06-gallery-"+activity.getResources().getConfiguration().screenWidthDp+"dp-font-"+activity.getResources().getConfiguration().fontScale);
+    }
+    private void cleanupCreatedMedia() {
+        // Only synthetic rows created by this run; called before finish can terminate the process.
+        for(String uri:createdMedia)try{getTargetContext().getContentResolver().delete(android.net.Uri.parse(uri),null,null);}catch(Exception ignored){}
+        createdMedia.clear();
+    }
+    private void prepareProcessDeath()throws Exception {
+        File source=new File(getTargetContext().getCacheDir(),"process-original.jpg");
+        try(InputStream in=getTargetContext().getAssets().open("41232663d06e8f19609d78e8.jpg");OutputStream out=new FileOutputStream(source)){byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);}
+        OriginalCopy.Receipt receipt;try(InputStream in=new FileInputStream(source)){receipt=OriginalCopy.inspect(in,source.length(),new CancelToken());}
+        android.net.Uri saved=new MediaSaver(getTargetContext()).save(source,"DEMO_process_death_saved.JPG",receipt,true,new CancelToken());
+        android.content.ContentValues values=new android.content.ContentValues();values.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME,"DEMO_process_death_pending.JPG");values.put(android.provider.MediaStore.Images.Media.MIME_TYPE,"image/jpeg");values.put(android.provider.MediaStore.Images.Media.RELATIVE_PATH,"Pictures/GR III Transfer Demo");values.put(android.provider.MediaStore.Images.Media.IS_PENDING,1);
+        android.net.Uri pending=getTargetContext().getContentResolver().insert(android.provider.MediaStore.Images.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY),values);check(pending!=null,"prepare app-owned pending row");
+        Set<String> journal=new HashSet<>();journal.add(pending.toString());journal.add(saved.toString());
+        check(getTargetContext().getSharedPreferences("pending-saves",0).edit().putStringSet("uris",journal).commit(),"simulate journal at process death including already-published URI");
+        File orphan=new File(getTargetContext().getCacheDir(),"originals/orphan-process-test.jpg");try(OutputStream out=new FileOutputStream(orphan)){out.write(new byte[]{1,2,3});}
+        org.json.JSONObject metadata=new org.json.JSONObject();metadata.put("saved",saved.toString());metadata.put("pending",pending.toString());metadata.put("sha256",receipt.sha256);metadata.put("bytes",receipt.bytes);
+        try(OutputStream out=new FileOutputStream(new File(getTargetContext().getFilesDir(),"process-test.json"))){out.write(metadata.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));}
+        source.delete();check(orphan.isFile(),"prepare orphan private cache");
+    }
+    private void verifyProcessDeath()throws Exception {
+        String text;try(InputStream in=new FileInputStream(new File(getTargetContext().getFilesDir(),"process-test.json"))){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1)out.write(b,0,n);text=out.toString("UTF-8");}
+        org.json.JSONObject metadata=new org.json.JSONObject(text);android.net.Uri saved=android.net.Uri.parse(metadata.getString("saved")),pending=android.net.Uri.parse(metadata.getString("pending"));
+        try(android.database.Cursor cursor=getTargetContext().getContentResolver().query(pending,new String[]{android.provider.MediaStore.Images.Media._ID},null,null,null)){check(cursor==null||!cursor.moveToFirst(),"process restart removes only recorded pending row");}
+        try(InputStream in=getTargetContext().getContentResolver().openInputStream(saved)){OriginalCopy.Receipt receipt=OriginalCopy.inspect(in,metadata.getLong("bytes"),new CancelToken());check(receipt.sha256.equals(metadata.getString("sha256")),"process restart preserves already-published exact original");}
+        check(!new File(getTargetContext().getCacheDir(),"originals/orphan-process-test.jpg").exists(),"process restart removes orphan app cache");
+        check(getTargetContext().getSharedPreferences("pending-saves",0).getStringSet("uris",Collections.emptySet()).isEmpty(),"process restart clears handled pending journal");
+        getTargetContext().getContentResolver().delete(saved,null,null);new File(getTargetContext().getFilesDir(),"process-test.json").delete();
+    }
+    private void check(boolean value,String label){assertions++;if(!value)throw new AssertionError(label);Bundle progress=new Bundle();progress.putString("stream","Checked: "+label+"\n");sendStatus(0,progress);}
+    private void awaitIdle()throws Exception {
+        long deadline=SystemClock.elapsedRealtime()+60000;
+        while(SystemClock.elapsedRealtime()<deadline){boolean idle;synchronized(controller){idle=!controller.busy;}if(idle){waitForIdleSync();return;}Thread.sleep(50);}
+        throw new AssertionError("operation did not finish: "+controller.status);
+    }
+    private ImageView firstImage(View root){if(root instanceof ImageView)return (ImageView)root;if(root instanceof ViewGroup)for(int i=0;i<((ViewGroup)root).getChildCount();i++){ImageView found=firstImage(((ViewGroup)root).getChildAt(i));if(found!=null)return found;}return null;}
+    private boolean insideScroll(View view){android.view.ViewParent parent=view.getParent();while(parent!=null){if(parent instanceof ScrollView)return true;parent=parent.getParent();}return false;}
+    private String collectText(View root){StringBuilder out=new StringBuilder();if(root instanceof TextView)out.append(((TextView)root).getText()).append('\n');if(root instanceof ViewGroup)for(int i=0;i<((ViewGroup)root).getChildCount();i++)out.append(collectText(((ViewGroup)root).getChildAt(i)));return out.toString();}
+    private boolean dialogContains(String value){AccessibilityNodeInfo root=getUiAutomation().getRootInActiveWindow();return root!=null&&!root.findAccessibilityNodeInfosByText(value).isEmpty();}
+    private View find(View root,String text){if(root instanceof TextView&&text.contentEquals(((TextView)root).getText()))return root;if(root instanceof ViewGroup)for(int i=0;i<((ViewGroup)root).getChildCount();i++){View found=find(((ViewGroup)root).getChildAt(i),text);if(found!=null)return found;}return null;}
+    private void click(String label){waitForIdleSync();runOnMainSync(()->{View found=find(activity.getWindow().getDecorView(),label);if(found==null||!found.isEnabled())throw new AssertionError("Missing enabled UI action: "+label);found.performClick();});waitForIdleSync();}
+    private void clickDialog(String label)throws Exception {
+        long deadline=SystemClock.elapsedRealtime()+60000;
+        while(SystemClock.elapsedRealtime()<deadline){AccessibilityNodeInfo root=getUiAutomation().getRootInActiveWindow();if(root!=null){for(AccessibilityNodeInfo node:root.findAccessibilityNodeInfosByText(label))if(node.getText()!=null&&label.equalsIgnoreCase(node.getText().toString())&&node.isClickable()){check(node.performAction(AccessibilityNodeInfo.ACTION_CLICK),"dialog click "+label);waitForIdleSync();return;}}Thread.sleep(100);}
+        throw new AssertionError("Dialog action unavailable: "+label);
+    }
+    private void screenshot(String name)throws IOException {
+        waitForIdleSync();Bitmap bitmap=getUiAutomation().takeScreenshot();if(bitmap==null)return;
+        File directory=new File(getTargetContext().getFilesDir(),"smoke-screenshots");directory.mkdirs();
+        try(OutputStream out=new FileOutputStream(new File(directory,name+".png"))){bitmap.compress(Bitmap.CompressFormat.PNG,100,out);}bitmap.recycle();
+    }
+}

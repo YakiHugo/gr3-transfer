@@ -98,18 +98,19 @@ export async function createBridge({ adapter = new CameraAdapter(), fixtureRoot 
   let controller = new AbortController();
   let state = { mode: 'disconnected', connected: false, model: 'RICOH GR III', firmware: null, battery: null };
   let photos = [];
+  let summary = null;
   let photoMap = new Map();
   const session = () => ({ ...state, csrfToken, hardwareVerified: false, sessionId: generation, photosCount: photos.length, localOnly: true });
   const reset = () => {
     controller.abort(); controller = new AbortController(); generation = randomBytes(12).toString('hex');
-    photos = []; photoMap = new Map();
+    photos = []; photoMap = new Map(); summary = null;
     state = { mode: 'disconnected', connected: false, model: 'RICOH GR III', firmware: null, battery: null };
   };
   const assign = list => {
     photos = list.map(p => ({ ...p, thumbnailUrl: `/api/photos/${p.id}/thumbnail?session=${generation}`, previewUrl: `/api/photos/${p.id}/preview?session=${generation}`, originalUrl: `/api/photos/${p.id}/original?session=${generation}` }));
     photoMap = new Map(photos.map(p => [p.id, p]));
   };
-  const photoList = () => ({ photos, mode: state.mode, hardwareVerified: false });
+  const photoList = () => ({ photos, summary, mode: state.mode, hardwareVerified: false });
 
   const server = http.createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -153,6 +154,7 @@ export async function createBridge({ adapter = new CameraAdapter(), fixtureRoot 
             signal.throwIfAborted();
             state = { mode: 'camera', connected: true, ...result.properties };
             assign(result.photos);
+            summary = result.summary || null;
           }
           json(res, 200, session()); return;
         } finally { res.off('close', abandon); }
@@ -165,7 +167,8 @@ export async function createBridge({ adapter = new CameraAdapter(), fixtureRoot 
         if (!state.connected) throw new AppError('Connect your camera or open the demo first.', 'DISCONNECTED', 409);
         const signal = controller.signal;
         if (state.mode === 'camera') {
-          const list = await adapter.list(signal); signal.throwIfAborted(); assign(list);
+          const inventory = adapter.listInventory ? await adapter.listInventory(signal) : { photos: await adapter.list(signal), summary: null };
+          signal.throwIfAborted(); assign(inventory.photos); summary = inventory.summary || null;
         }
         json(res, 200, photoList()); return;
       }
@@ -199,6 +202,7 @@ export async function createBridge({ adapter = new CameraAdapter(), fixtureRoot 
       json(res, expected ? error.status : cancelled ? 409 : 500, {
         error: expected ? error.message : cancelled ? 'The previous operation was cancelled.' : 'The local bridge could not finish that request. Retry or restart it.',
         code: expected ? error.code : cancelled ? 'CANCELLED' : 'INTERNAL_ERROR',
+        ...(expected && ['identity', 'listing'].includes(error.cameraStage) ? { cameraStage: error.cameraStage } : {}),
       });
     }
   });
@@ -210,8 +214,8 @@ export async function createBridge({ adapter = new CameraAdapter(), fixtureRoot 
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT || 4317);
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('PORT must be an integer between 1024 and 65535.');
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('PORT 必须是 1024 到 65535 之间的整数。');
   const server = await createBridge();
-  server.on('error', error => { console.error(error.code === 'EADDRINUSE' ? `Port ${port} is already in use. Set PORT to another local port.` : 'Could not start the local bridge.'); process.exitCode = 1; });
-  server.listen(port, '127.0.0.1', () => console.log(`GR III Transfer · http://127.0.0.1:${port}\nLoopback only · disconnected · no camera requests until Connect GR III`));
+  server.on('error', error => { console.error(error.code === 'EADDRINUSE' ? `端口 ${port} 已被占用，请将 PORT 设置为其他本机端口。` : '本机程序无法启动。'); process.exitCode = 1; });
+  server.listen(port, '127.0.0.1', () => console.log(`GR Relay · http://127.0.0.1:${port}\n仅供本机使用 · 未连接 · 点击「连接相机」前不会访问相机`));
 }

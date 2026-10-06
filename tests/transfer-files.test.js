@@ -74,8 +74,8 @@ test('files: separate source sessions cannot overwrite identical camera paths wi
 });
 
 test('files: exact and case-insensitive duplicate archive paths are rejected', async () => {
-  await assert.rejects(buildArchive([entry(), entry()]), /same archive path/);
-  await assert.rejects(buildArchive([entry(), entry({ photo: { folder: '100ricoh', name: 'r0000001.jpg' } })]), /same archive path/);
+  await assert.rejects(buildArchive([entry(), entry()]), /相同的压缩包路径/);
+  await assert.rejects(buildArchive([entry(), entry({ photo: { folder: '100ricoh', name: 'r0000001.jpg' } })]), /相同的压缩包路径/);
 });
 
 test('files: archive count and total byte limits are enforced before reading payloads', async () => {
@@ -93,11 +93,11 @@ test('files: cancellation stops packaging without losing or altering source Blob
 });
 
 test('files: empty, missing, oversized and unsafe entries fail clearly', async () => {
-  await assert.rejects(buildArchive([]), /at least one/);
-  await assert.rejects(buildArchive([entry({ blob: null })]), /missing/);
-  await assert.rejects(buildArchive([entry({ sourceId: '' })]), /identity/);
-  await assert.rejects(buildArchive([entry({ photo: { folder: '100RICOH', name: '../R.JPG' } })]), /unsafe/);
-  await assert.rejects(buildArchive([entry({ blob: { size: 129 * 1024 * 1024, type: 'image/jpeg' } })]), /size limit/);
+  await assert.rejects(buildArchive([]), /至少一张/);
+  await assert.rejects(buildArchive([entry({ blob: null })]), /已失效/);
+  await assert.rejects(buildArchive([entry({ sourceId: '' })]), /来源标识/);
+  await assert.rejects(buildArchive([entry({ photo: { folder: '100RICOH', name: '../R.JPG' } })]), /安全检查/);
+  await assert.rejects(buildArchive([entry({ blob: { size: 129 * 1024 * 1024, type: 'image/jpeg' } })]), /大小限制/);
 });
 
 test('files: large-file CRC work yields so cancellation interrupts preparation between chunks', async () => {
@@ -120,5 +120,5 @@ test('standalone receipt hashes retained originals without an archive or byte tr
   assert.match(result.receipt.checksumScope, /not an independent camera checksum/);
   const controller = new AbortController(); controller.abort();
   await assert.rejects(context.GRTransferFiles.buildReceipt(e, { signal: controller.signal }), { name: 'AbortError' });
-  await assert.rejects(context.GRTransferFiles.buildReceipt(entry({ blob: new Blob([]) })), /retained original/);
+  await assert.rejects(context.GRTransferFiles.buildReceipt(entry({ blob: new Blob([]) })), /先完成 JPEG 原片传输/);
 });
