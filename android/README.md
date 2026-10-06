@@ -22,6 +22,8 @@ start a bridge, expose a server, or change the desktop implementation.
 
 「更多 → 筛选与排序」可搜索文件名或文件夹，不访问额外相机端点。支持相机列表顺序、自然文件名升降序、文件夹升序；例如 R2 排在 R10 之前。列表不提供拍摄时间，排序不会冒充时间顺序。「仅看已选照片」便于检查跨页选择；始终显示已选数量，筛选隐藏的已选照片会明确提示，仍包含在底部导入操作中。「更多」还可反选当前页、清除全部选择；反选保留其他页的选择，所有选片操作遵守 48 张上限，达到上限会提示未加入数量。文件夹菜单显示各目录的 JPEG 数量，可与搜索组合使用。搜索忽略大小写和首尾空格，取消不会改变条件；旋转屏幕保留搜索，重新连接重置。
 
+同文件夹、同文件名主体的安全 DNG/PEF 会显示「JPEG + DNG / PEF」标记，详情解释仅导入 JPEG。标记只保留格式枚举，不保留 RAW 请求路径；RAW 仍不支持浏览、读取、转换或保存。
+
 ## Status and verification
 
 **Compiled Android test client, not physical-camera validated.** The original protocol remains
@@ -237,3 +239,22 @@ runner's official Android SDK. APK artifacts are test builds, not production
 release identities. Hosted build success does not imply emulator execution or
 physical camera compatibility; the emulator evidence above is a separate local
 run, and the hardware checklist remains open.
+
+### Gallery and tray regression coverage (2026-10-06 batch)
+
+- SDK-free core contracts: **295 assertions** pass locally, including actual gallery
+  search/folder/natural-order/selection operations, refresh reconciliation, saved-only
+  cleanup, bounded per-item retry/removal and safe RAW pairing metadata
+- The `tools` instrumentation phase exercises search application/cancel, combined
+  folder and natural sorting, Activity recreation, selected-only/empty results,
+  hidden-selection disclosure, same-session demo refresh/cancel, page inversion,
+  RAW badges/details, declined/confirmed individual removal, selective retry,
+  busy removal guards and mixed saved/unsaved cleanup with real MediaStore readback
+- `test-emulator.sh` now includes that phase and the existing native layout phase. The hosted Android workflow adds a
+  disposable API 29 software-emulator job, using official SDK tools, preaccepted
+  runner licenses, no KVM permission changes, and synthetic fixtures only. Logs
+  and app screenshots are uploaded even on failure
+- **This batch has no local SDK or emulator available.** Core tests and source
+  audits passed locally; new APK compilation, lint and runtime results must be
+  read from the exact-commit hosted jobs before declaring the changes validated.
+  Historical emulator results above do not cover these new features

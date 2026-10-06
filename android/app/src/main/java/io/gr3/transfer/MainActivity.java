@@ -100,7 +100,7 @@ public final class MainActivity extends Activity {
         int start = page*PAGE_SIZE, end = Math.min(photos.size(),start+PAGE_SIZE);
         List<CameraRules.Photo> visible = new ArrayList<>(photos.subList(start,end));
         content.addView(text("选择照片",23,true));
-        content.addView(text("显示 "+photos.size()+" / "+controller.inventory.photos.size()+" 张 JPEG · 已选 "+selected.size()+(controller.demo?" · 演示图片，单独保存":" · 原片不压缩")+(pages>1?" · 第 "+(page+1)+" / "+pages+" 页":""),12,false));
+        content.addView(text(photos.size()+" / "+controller.inventory.photos.size()+" JPEG · 已选 "+selected.size()+(controller.demo?" · 演示":"")+(pages>1?" · 第 "+(page+1)+" / "+pages+" 页":""),12,false));
         if(!searchQuery.isEmpty()||!filterFolder.isEmpty()||selectedOnly)content.addView(text((filterFolder.isEmpty()?"全部文件夹":filterFolder)+(searchQuery.isEmpty()?"":" · 搜索："+searchQuery)+(selectedOnly?" · 仅看已选":"")+" · 已筛选",12,false));
         int hiddenSelected=selected.size()-GalleryRules.selectedCount(photos,selected);
         if(hiddenSelected>0)content.addView(text("另有 "+hiddenSelected+" 张已选照片不在当前筛选中，导入时会一起处理。",12,false));
@@ -151,7 +151,8 @@ public final class MainActivity extends Activity {
             if(checked&&selected.size()>=CameraRules.MAX_ENTRIES){check.setChecked(false);Toast.makeText(this,"每批最多选择 48 张照片",Toast.LENGTH_SHORT).show();return;}
             if(checked)selected.add(photo.key());else selected.remove(photo.key());render();
         });tile.addView(check);
-        TextView folder=text(photo.folder,11,false);folder.setTextColor(MUTED);tile.addView(folder);return tile;
+        TextView folder=text(photo.folder,11,false);folder.setTextColor(MUTED);tile.addView(folder);
+        if(!photo.rawFormats.isEmpty())tile.addView(text("JPEG + "+photo.rawLabel()+" · 仅导入 JPEG",11,false));return tile;
     }
     private List<CameraRules.Photo> filteredPhotos() { return GalleryRules.sort(GalleryRules.selected(GalleryRules.filter(controller.inventory.photos, searchQuery, filterFolder), selected, selectedOnly), sortOrder); }
     private List<CameraRules.Photo> currentPagePhotos() {
@@ -173,7 +174,8 @@ public final class MainActivity extends Activity {
         fields.addView(text("文件夹",13,true));Spinner folder=new Spinner(this);folder.setContentDescription("按相机文件夹筛选");folder.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,labels));folder.setSelection(Math.max(0,folders.indexOf(filterFolder)));fields.addView(folder);
         CheckBox onlySelected=new CheckBox(this);onlySelected.setText("仅看已选照片");onlySelected.setChecked(selectedOnly);fields.addView(onlySelected);
         fields.addView(text("排序（不是拍摄时间）",13,true));Spinner order=new Spinner(this);order.setContentDescription("照片排序");order.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"相机列表顺序","文件名：从小到大","文件名：从大到小","文件夹：从小到大"}));order.setSelection(sortOrder.ordinal());fields.addView(order);
-        new AlertDialog.Builder(this).setTitle("筛选与排序").setView(fields)
+        ScrollView filterBody=new ScrollView(this);filterBody.addView(fields);
+        new AlertDialog.Builder(this).setTitle("筛选与排序").setView(filterBody)
             .setNegativeButton("取消",null).setNeutralButton("清除筛选",(d,w)->{searchQuery="";filterFolder="";sortOrder=GalleryRules.SortOrder.CAMERA;selectedOnly=false;page=0;render(true);})
             .setPositiveButton("应用",(d,w)->{searchQuery=query.getText().toString().trim();filterFolder=folders.get(folder.getSelectedItemPosition());sortOrder=GalleryRules.SortOrder.values()[order.getSelectedItemPosition()];selectedOnly=onlySelected.isChecked();page=0;render(true);}).show();
     }
@@ -251,6 +253,7 @@ public final class MainActivity extends Activity {
     }
     private void entryDetails(TransferTray.Entry entry) {
         String value="文件夹："+entry.photo.folder+"\n状态："+stateLabel(entry.status)+"\n尝试次数："+entry.attempts+" / 3\n来源会话："+entry.session.substring(0,8)+"\n"+entry.message;
+        if(!entry.photo.rawFormats.isEmpty())value+="\n同文件夹 RAW："+entry.photo.rawLabel()+"（仅显示配对信息，不会读取或导入 RAW）";
         if(entry.receipt!=null)value+="\n\n文件大小："+size(entry.receipt.bytes)+"\nSHA-256\n"+entry.receipt.sha256+"\n\n此校验值用于核对收到的字节，并非相机提供的校验值。如需端到端验证，请与读卡器导出的原片比较。";
         TextView details=text(value,14,false);details.setTextIsSelectable(true);details.setPadding(dp(24),dp(10),dp(24),dp(10));ScrollView body=new ScrollView(this);body.addView(details);
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle(entry.photo.name).setView(body).setPositiveButton("关闭",null).setNeutralButton("移除记录",(d,w)->removeEntry(entry)).create();

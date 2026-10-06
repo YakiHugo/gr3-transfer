@@ -129,6 +129,28 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
     }
     private void verifyGalleryTools()throws Exception {
         String source=controller.session;CameraRules.Photo first=controller.inventory.photos.get(0);click(first.name);
+        click("更多");clickDialog("筛选与排序");setDialogText("R0000002");clickDialog("应用");
+        runOnMainSync(()->{
+            View root=activity.getWindow().getDecorView();check(find(root,"R0000002.JPG")!=null&&find(root,first.name)==null,"filename search renders matching card only");
+            check(find(root,"导入原片（1）")!=null&&collectText(root).contains("另有 1 张已选"),"hidden selection remains disclosed and importable");
+        });
+        click("更多");clickDialog("筛选与排序");setDialogText("missing");clickDialog("取消");
+        runOnMainSync(()->check(find(activity.getWindow().getDecorView(),"R0000002.JPG")!=null,"cancelled filter edit leaves active search unchanged"));
+        click("更多");clickDialog("筛选与排序");clickDialog("清除筛选");
+        click("更多");clickDialog("筛选与排序");clickDialog("全部文件夹（12）");clickDialog("101RICOH（6）");clickDialog("相机列表顺序");clickDialog("文件名：从大到小");clickDialog("应用");
+        runOnMainSync(()->{
+            List<CheckBox> boxes=photoChecks(activity.getWindow().getDecorView());check(boxes.size()==6&&boxes.get(0).getText().toString().equals("R0000012.JPG"),"folder and descending filename sort combine in rendered gallery");
+        });
+        ActivityMonitor filterRotation=addMonitor(MainActivity.class.getName(),null,false);runOnMainSync(()->activity.recreate());
+        Activity restored=waitForMonitorWithTimeout(filterRotation,60000);removeMonitor(filterRotation);check(restored!=null,"filtered activity recreates");activity=(MainActivity)restored;waitForIdleSync();
+        runOnMainSync(()->check(photoChecks(activity.getWindow().getDecorView()).size()==6&&find(activity.getWindow().getDecorView(),"导入原片（1）")!=null,"recreation preserves folder sort and hidden selection"));
+        click("更多");clickDialog("筛选与排序");clickDialog("仅看已选照片");clickDialog("应用");
+        runOnMainSync(()->check(photoChecks(activity.getWindow().getDecorView()).isEmpty()&&find(activity.getWindow().getDecorView(),"导入原片（1）")!=null,"zero filtered matches retain selected import action"));
+        click("更多");clickDialog("筛选与排序");clickDialog("清除筛选");
+        click("更多");clickDialog("筛选与排序");clickDialog("仅看已选照片");clickDialog("应用");
+        runOnMainSync(()->check(photoChecks(activity.getWindow().getDecorView()).size()==1,"selected-only view shows selected card"));
+        click(first.name);runOnMainSync(()->check(photoChecks(activity.getWindow().getDecorView()).isEmpty(),"deselecting last selected-only card renders empty state"));
+        click("更多");clickDialog("筛选与排序");clickDialog("清除筛选");click(first.name);
         click("更多");clickDialog("刷新演示照片");awaitIdle();
         synchronized(controller){check(controller.connected&&controller.demo&&source.equals(controller.session),"demo refresh preserves source mode and session");check(controller.inventory.photos.size()==12,"demo refresh returns complete inventory");}
         runOnMainSync(()->check(find(activity.getWindow().getDecorView(),"导入原片（1）")!=null,"refresh preserves selected source key"));
@@ -138,12 +160,32 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
         runOnMainSync(()->check(find(activity.getWindow().getDecorView(),"选择要导入的照片")!=null,"clear selection updates docked action"));
         runOnMainSync(()->{controller.refresh();controller.cancel();});awaitIdle();
         synchronized(controller){check(controller.connected&&controller.demo&&source.equals(controller.session)&&controller.inventory.photos.size()==12,"cancelled refresh retains connected inventory");}
+        runOnMainSync(()->{
+            synchronized(controller){
+                List<CameraRules.Photo> paired=new ArrayList<>(controller.inventory.photos);try{paired.set(0,new CameraRules.Photo(first.folder,first.name,first.asset,Collections.singleton(CameraRules.RawFormat.DNG)));}catch(IOException error){throw new AssertionError(error);}
+                controller.inventory=new CameraRules.Inventory(paired,1,0,0);
+            }
+        });click("照片");
+        runOnMainSync(()->check(collectText(activity.getWindow().getDecorView()).contains("JPEG + DNG · 仅导入 JPEG"),"paired RAW badge clearly limits transfer to JPEG"));
         click(first.name);click("导入原片（1）");awaitIdle();
         TransferTray.Entry entry=controller.entries().get(0);File cached=entry.file;
-        click("详情");clickDialog("移除记录");clickDialog("保留原片");
+        click("详情");check(dialogContains("同文件夹 RAW：DNG")&&dialogContains("不会读取或导入 RAW"),"entry details retain enum-only RAW pairing disclosure");clickDialog("移除记录");clickDialog("保留原片");
         synchronized(controller){check(controller.entries().size()==1&&cached.exists(),"declined individual removal retains original");}
         click("详情");clickDialog("移除记录");clickDialog("移除临时副本");waitForIdleSync();
         synchronized(controller){check(controller.entries().isEmpty()&&!cached.exists(),"confirmed individual removal clears only selected original");}
+        List<CameraRules.Photo> photos=controller.inventory.photos;Set<String> two=new HashSet<>(Arrays.asList(photos.get(0).key(),photos.get(1).key()));
+        runOnMainSync(()->{synchronized(controller){controller.transfer(two);controller.cancel();}});awaitIdle();
+        click("重试这张");awaitIdle();
+        synchronized(controller){check(controller.entries().get(0).status==TransferTray.Status.READY&&controller.entries().get(1).status==TransferTray.Status.CANCELLED,"individual retry leaves other cancelled item untouched");}
+        runOnMainSync(()->{synchronized(controller){controller.retry(controller.entries().get(1).key);check(controller.remove(controller.entries().get(0).key,true)==TransferTray.RemoveResult.BUSY,"controller prevents removal while another original is transferring");}});awaitIdle();
+        click("保存到相册（2）");clickDialog("确认保存");awaitIdle();
+        synchronized(controller){for(TransferTray.Entry saved:controller.entries()){check(saved.status==TransferTray.Status.SAVED&&saved.savedUri!=null,"retry originals save successfully");createdMedia.add(saved.savedUri);}}
+        runOnMainSync(()->controller.transfer(Collections.singleton(photos.get(2).key())));awaitIdle();
+        File unsaved=controller.entries().get(2).file;
+        click("更多");clickDialog("清理已保存记录（2）");waitForIdleSync();
+        synchronized(controller){check(controller.entries().size()==1&&controller.hasUnsaved()&&unsaved.exists(),"clear-saved UI preserves unsaved original in mixed tray");}
+        for(String uri:createdMedia)try(InputStream in=getTargetContext().getContentResolver().openInputStream(android.net.Uri.parse(uri))){check(OriginalCopy.inspect(in,-1,new CancelToken()).bytes>0,"clear-saved retains published MediaStore original");}
+        runOnMainSync(controller::clear);cleanupCreatedMedia();screenshot("07-gallery-tools");
     }
     private void verifyLayout()throws Exception {
         runOnMainSync(()->controller.loadThumbnails(controller.inventory.photos));awaitIdle();
@@ -202,9 +244,17 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
     private boolean dialogContains(String value){AccessibilityNodeInfo root=getUiAutomation().getRootInActiveWindow();return root!=null&&!root.findAccessibilityNodeInfosByText(value).isEmpty();}
     private View find(View root,String text){if(root instanceof TextView&&text.contentEquals(((TextView)root).getText()))return root;if(root instanceof ViewGroup)for(int i=0;i<((ViewGroup)root).getChildCount();i++){View found=find(((ViewGroup)root).getChildAt(i),text);if(found!=null)return found;}return null;}
     private void click(String label){waitForIdleSync();runOnMainSync(()->{View found=find(activity.getWindow().getDecorView(),label);if(found==null||!found.isEnabled())throw new AssertionError("Missing enabled UI action: "+label);found.performClick();});waitForIdleSync();}
+    private List<CheckBox> photoChecks(View root) { List<CheckBox> found=new ArrayList<>();if(root instanceof CheckBox)found.add((CheckBox)root);if(root instanceof ViewGroup)for(int i=0;i<((ViewGroup)root).getChildCount();i++)found.addAll(photoChecks(((ViewGroup)root).getChildAt(i)));return found; }
+    private AccessibilityNodeInfo editable(AccessibilityNodeInfo root) { if(root==null)return null;if(root.isEditable())return root;for(int i=0;i<root.getChildCount();i++){AccessibilityNodeInfo found=editable(root.getChild(i));if(found!=null)return found;}return null; }
+    private void setDialogText(String value)throws Exception {
+        long deadline=SystemClock.elapsedRealtime()+10000;
+        while(SystemClock.elapsedRealtime()<deadline){AccessibilityNodeInfo input=editable(getUiAutomation().getRootInActiveWindow());if(input!=null){Bundle args=new Bundle();args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,value);check(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,args),"edit filter query");waitForIdleSync();return;}Thread.sleep(100);}
+        throw new AssertionError("Filter query is not editable");
+    }
+    private boolean scrollDialog(AccessibilityNodeInfo root) { if(root==null)return false;if(root.isScrollable()&&root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD))return true;for(int i=0;i<root.getChildCount();i++)if(scrollDialog(root.getChild(i)))return true;return false; }
     private void clickDialog(String label)throws Exception {
         long deadline=SystemClock.elapsedRealtime()+60000;
-        while(SystemClock.elapsedRealtime()<deadline){AccessibilityNodeInfo root=getUiAutomation().getRootInActiveWindow();if(root!=null){for(AccessibilityNodeInfo node:root.findAccessibilityNodeInfosByText(label))if(node.getText()!=null&&label.equalsIgnoreCase(node.getText().toString())&&node.isClickable()){check(node.performAction(AccessibilityNodeInfo.ACTION_CLICK),"dialog click "+label);waitForIdleSync();return;}}Thread.sleep(100);}
+        while(SystemClock.elapsedRealtime()<deadline){AccessibilityNodeInfo root=getUiAutomation().getRootInActiveWindow();if(root!=null){for(AccessibilityNodeInfo node:root.findAccessibilityNodeInfosByText(label))if(node.getText()!=null&&label.equalsIgnoreCase(node.getText().toString())){AccessibilityNodeInfo target=node;for(int depth=0;target!=null&&depth<4;depth++,target=target.getParent())if(target.isClickable()&&target.isVisibleToUser()){check(target.performAction(AccessibilityNodeInfo.ACTION_CLICK),"dialog click "+label);waitForIdleSync();return;}}scrollDialog(root);}Thread.sleep(100);}
         throw new AssertionError("Dialog action unavailable: "+label);
     }
     private void screenshot(String name)throws IOException {
