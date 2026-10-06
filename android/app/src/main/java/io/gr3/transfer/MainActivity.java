@@ -20,6 +20,7 @@ public final class MainActivity extends Activity {
     private final Set<String> selected = new LinkedHashSet<>();
     private final Map<String,Bitmap> bitmapCache = new HashMap<>();
     private int page, renderGeneration;
+    private CameraRules.Inventory selectionInventory;
     private boolean trayTab, selectedOnly;
     private GalleryRules.SortOrder sortOrder = GalleryRules.SortOrder.CAMERA;
     private static final int PAGE_SIZE = 20;
@@ -64,6 +65,11 @@ public final class MainActivity extends Activity {
         int generation = ++renderGeneration;
         synchronized (controller) {
             if (!selectionSession.equals(controller.session)) { selected.clear(); searchQuery = ""; filterFolder = ""; sortOrder = GalleryRules.SortOrder.CAMERA; selectedOnly = false; page = 0; selectionSession = controller.session; bitmapCache.clear(); }
+            if(selectionInventory!=controller.inventory) {
+                Set<String> retained=GalleryRules.reconcileSelection(selected,controller.inventory.photos);selected.clear();selected.addAll(retained);
+                if(!filterFolder.isEmpty()&&!GalleryRules.folders(controller.inventory.photos).containsKey(filterFolder))filterFolder="";
+                bitmapCache.clear();selectionInventory=controller.inventory;
+            }
             status.setText(controller.status);
             navigation.removeAllViews(); bottom.removeAllViews(); content.removeAllViews();
             boolean showTabs=controller.connected||!controller.entries().isEmpty(); navigation.setVisibility(showTabs?View.VISIBLE:View.GONE);
@@ -176,7 +182,7 @@ public final class MainActivity extends Activity {
         if(controller.connected){labels.add("筛选与排序");actions.add(this::galleryFilters);}
         if(controller.connected&&!controller.inventory.photos.isEmpty()){labels.add("反选本页照片");actions.add(()->changeSelection(currentPagePhotos(),GalleryRules.SelectionAction.INVERT));}
         if(!selected.isEmpty()){labels.add("清除全部选择（"+selected.size()+"）");actions.add(()->changeSelection(Collections.emptyList(),GalleryRules.SelectionAction.CLEAR));}
-        if(controller.connected){labels.add("刷新相机照片");actions.add(()->controller.connect(false));}
+        if(controller.connected){labels.add(controller.demo?"刷新演示照片":"刷新相机照片");actions.add(controller::refresh);}
         labels.add("打开 Wi-Fi 设置");actions.add(()->startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS)));
         labels.add("试用演示照片");actions.add(()->controller.connect(true));
         if(controller.connected){labels.add("断开连接");actions.add(controller::disconnect);labels.add("照片与连接详情");actions.add(this::connectionDetails);}

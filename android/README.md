@@ -179,7 +179,7 @@ original from byte zero, at most three attempts per entry. It never assumes
 HTTP Range support. Ready/saved entries are not retransferred in the same
 session; same filenames in different folders remain distinct.
 
-Every reconnect/refresh/demo switch creates a fresh random session. Older failed
+Every reconnect/demo switch creates a fresh random session. Refresh reads the current source again without reconnecting or switching demo to camera mode; it preserves the session, available selections and retained originals. Missing selected keys are removed, stale folder filters reset, and a failed/cancelled refresh retains the previous list. An explicitly rejected model invalidates the connection. Older failed
 entries cannot be retried against a new card/camera: reconnect and explicitly
 select missing filenames again. No persistent camera identifier is collected.
 Disconnect invalidates the source and stops pending work, retaining ready files.
