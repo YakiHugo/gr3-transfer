@@ -15,6 +15,9 @@ emulator_pid=
 cleanup() {
   adb -s emulator-5554 logcat -d > build/native-smoke/logcat.txt 2>&1 || true
   adb -s emulator-5554 exec-out run-as io.gr3.transfer tar -cf - files/smoke-screenshots > build/native-smoke/screenshots.tar 2>/dev/null || true
+  if adb -s emulator-5554 shell run-as io.gr3.transfer test -f files/dialog-failure.txt 2>/dev/null; then
+    adb -s emulator-5554 exec-out run-as io.gr3.transfer cat files/dialog-failure.txt > build/native-smoke/dialog-failure.txt 2>/dev/null || true
+  fi
   if [[ -n $emulator_pid ]]; then kill "$emulator_pid" 2>/dev/null || true; wait "$emulator_pid" 2>/dev/null || true; fi
   rm -rf "$ANDROID_AVD_HOME"
 }

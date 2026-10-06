@@ -22,6 +22,11 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
     @Override public void onStart() {
         Bundle result = new Bundle();
         try {
+            // Connect accessibility before showing dialogs; late attachment on API 29
+            // can leave the first dialog absent from the active-window lookup.
+            android.accessibilityservice.AccessibilityServiceInfo service=getUiAutomation().getServiceInfo();
+            service.flags|=android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+            getUiAutomation().setServiceInfo(service);
             activity = (MainActivity) startActivitySync(new Intent(getTargetContext(), MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             controller = ((TransferApplication) activity.getApplication()).controller;
             waitForIdleSync();
@@ -128,6 +133,7 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
         }
     }
     private void verifyGalleryTools()throws Exception {
+        screenshot("07-tools-connected");
         String source=controller.session;CameraRules.Photo first=controller.inventory.photos.get(0);click(first.name);
         click("更多");clickDialog("筛选与排序");setDialogText("R0000002");clickDialog("应用");
         runOnMainSync(()->{
@@ -254,8 +260,29 @@ public final class NativeSmokeInstrumentation extends Instrumentation {
     private boolean scrollDialog(AccessibilityNodeInfo root) { if(root==null)return false;if(root.isScrollable()&&root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD))return true;for(int i=0;i<root.getChildCount();i++)if(scrollDialog(root.getChild(i)))return true;return false; }
     private void clickDialog(String label)throws Exception {
         long deadline=SystemClock.elapsedRealtime()+60000;
-        while(SystemClock.elapsedRealtime()<deadline){AccessibilityNodeInfo root=getUiAutomation().getRootInActiveWindow();if(root!=null){for(AccessibilityNodeInfo node:root.findAccessibilityNodeInfosByText(label))if(node.getText()!=null&&label.equalsIgnoreCase(node.getText().toString())){AccessibilityNodeInfo target=node;for(int depth=0;target!=null&&depth<4;depth++,target=target.getParent())if(target.isClickable()&&target.isVisibleToUser()){check(target.performAction(AccessibilityNodeInfo.ACTION_CLICK),"dialog click "+label);waitForIdleSync();return;}}scrollDialog(root);}Thread.sleep(100);}
-        throw new AssertionError("Dialog action unavailable: "+label);
+        while(SystemClock.elapsedRealtime()<deadline){List<AccessibilityNodeInfo> roots=dialogRoots();for(AccessibilityNodeInfo root:roots)if(clickDialogNode(root,label)){check(true,"dialog click "+label);waitForIdleSync();return;}for(AccessibilityNodeInfo root:roots)scrollDialog(root);Thread.sleep(100);}
+        StringBuilder hierarchy=new StringBuilder();for(AccessibilityNodeInfo root:dialogRoots())describeNode(root,hierarchy,0);
+        try(OutputStream out=new FileOutputStream(new File(getTargetContext().getFilesDir(),"dialog-failure.txt"))){out.write(hierarchy.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));}
+        throw new AssertionError("Dialog action unavailable: "+label+"\n"+hierarchy);
+    }
+    private List<AccessibilityNodeInfo> dialogRoots() {
+        List<AccessibilityNodeInfo> roots=new ArrayList<>();AccessibilityNodeInfo active=getUiAutomation().getRootInActiveWindow();if(active!=null)roots.add(active);
+        for(android.view.accessibility.AccessibilityWindowInfo window:getUiAutomation().getWindows()){AccessibilityNodeInfo root=window.getRoot();if(root!=null)roots.add(root);}
+        return roots;
+    }
+    private boolean clickDialogNode(AccessibilityNodeInfo node,String label) {
+        if(node==null)return false;
+        if(node.getText()!=null&&label.equals(node.getText().toString())) {
+            AccessibilityNodeInfo target=node;
+            for(int depth=0;target!=null&&depth<4;depth++,target=target.getParent())if(target.isClickable()&&target.isEnabled()&&target.isVisibleToUser()&&target.performAction(AccessibilityNodeInfo.ACTION_CLICK))return true;
+        }
+        for(int i=0;i<node.getChildCount();i++)if(clickDialogNode(node.getChild(i),label))return true;
+        return false;
+    }
+    private void describeNode(AccessibilityNodeInfo node,StringBuilder out,int depth) {
+        if(node==null||depth>20)return;
+        out.append(node.getClassName()).append(" text=").append(node.getText()).append(" description=").append(node.getContentDescription()).append(" clickable=").append(node.isClickable()).append(" visible=").append(node.isVisibleToUser()).append('\n');
+        for(int i=0;i<node.getChildCount();i++)describeNode(node.getChild(i),out,depth+1);
     }
     private void screenshot(String name)throws IOException {
         waitForIdleSync();Bitmap bitmap=getUiAutomation().takeScreenshot();if(bitmap==null)return;
