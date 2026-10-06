@@ -18,6 +18,10 @@ start a bridge, expose a server, or change the desktop implementation.
 
 界面调整不会改变固定相机地址、JPEG 路径校验、已连接 Wi-Fi 路由、原片字节复制或 MediaStore 待保存清理/读回校验。
 
+## 本地选片工具
+
+「更多 → 筛选照片」可搜索文件名或文件夹，不访问额外相机端点。搜索忽略大小写和首尾空格，取消不会改变条件；旋转屏幕保留搜索，重新连接重置。
+
 ## Status and verification
 
 **Compiled Android test client, not physical-camera validated.** The original protocol remains

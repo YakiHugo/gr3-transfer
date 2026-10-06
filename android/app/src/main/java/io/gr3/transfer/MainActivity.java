@@ -16,7 +16,7 @@ public final class MainActivity extends Activity {
     private LinearLayout root, content, navigation, bottom;
     private ScrollView scroll;
     private TextView status;
-    private String selectionSession = "";
+    private String selectionSession = "", searchQuery = "";
     private final Set<String> selected = new LinkedHashSet<>();
     private final Map<String,Bitmap> bitmapCache = new HashMap<>();
     private int page, renderGeneration;
@@ -25,7 +25,7 @@ public final class MainActivity extends Activity {
     private static final int INK = Color.rgb(30,43,39), MUTED = Color.rgb(98,113,105), GREEN = Color.rgb(32,107,82), PAPER = Color.rgb(246,247,243);
     @Override public void onCreate(Bundle state) {
         super.onCreate(state); controller = ((TransferApplication)getApplication()).controller;
-        if (state != null) { page = state.getInt("page"); trayTab = state.getBoolean("tray"); selectionSession = state.getString("session", ""); ArrayList<String> saved = state.getStringArrayList("selected"); if (saved != null) selected.addAll(saved); }
+        if (state != null) { searchQuery = state.getString("query", ""); page = state.getInt("page"); trayTab = state.getBoolean("tray"); selectionSession = state.getString("session", ""); ArrayList<String> saved = state.getStringArrayList("selected"); if (saved != null) selected.addAll(saved); }
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(PAPER); root.setPadding(dp(18), dp(12), dp(18), dp(10));
         if (Build.VERSION.SDK_INT >= 30) root.setOnApplyWindowInsetsListener((view, insets) -> {
             Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
@@ -46,7 +46,7 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onStart() { super.onStart(); controller.listen(this::render); render(); }
     @Override protected void onStop() { controller.listen(null); if (!isChangingConfigurations()) controller.cancel(); super.onStop(); }
-    @Override protected void onSaveInstanceState(Bundle out) { out.putInt("page",page); out.putBoolean("tray",trayTab); out.putString("session",selectionSession); out.putStringArrayList("selected",new ArrayList<>(selected)); super.onSaveInstanceState(out); }
+    @Override protected void onSaveInstanceState(Bundle out) { out.putString("query",searchQuery); out.putInt("page",page); out.putBoolean("tray",trayTab); out.putString("session",selectionSession); out.putStringArrayList("selected",new ArrayList<>(selected)); super.onSaveInstanceState(out); }
     @android.annotation.SuppressLint("GestureBackNavigation")
     @Override public void onBackPressed() { leave(); }
     private void leave() {
@@ -62,7 +62,7 @@ public final class MainActivity extends Activity {
         int y = resetScroll ? 0 : scroll.getScrollY();
         int generation = ++renderGeneration;
         synchronized (controller) {
-            if (!selectionSession.equals(controller.session)) { selected.clear(); page = 0; selectionSession = controller.session; bitmapCache.clear(); }
+            if (!selectionSession.equals(controller.session)) { selected.clear(); searchQuery = ""; page = 0; selectionSession = controller.session; bitmapCache.clear(); }
             status.setText(controller.status);
             navigation.removeAllViews(); bottom.removeAllViews(); content.removeAllViews();
             boolean showTabs=controller.connected||!controller.entries().isEmpty(); navigation.setVisibility(showTabs?View.VISIBLE:View.GONE);
@@ -88,14 +88,15 @@ public final class MainActivity extends Activity {
             addButton(content,"使用与隐私说明",this::privacy,true);
             primary(bottom,"连接 GR III",()->controller.connect(false),!controller.busy); return;
         }
-        List<CameraRules.Photo> photos = controller.inventory.photos;
+        List<CameraRules.Photo> photos = GalleryRules.filter(controller.inventory.photos, searchQuery);
         int pages = Math.max(1,(photos.size()+PAGE_SIZE-1)/PAGE_SIZE); page = Math.min(page,pages-1);
         int start = page*PAGE_SIZE, end = Math.min(photos.size(),start+PAGE_SIZE);
         List<CameraRules.Photo> visible = new ArrayList<>(photos.subList(start,end));
         content.addView(text("选择照片",23,true));
         content.addView(text(photos.size()+" 张 JPEG"+(controller.demo?" · 演示图片，单独保存":" · 原片不压缩")+(pages>1?" · 第 "+(page+1)+" / "+pages+" 页":""),12,false));
+        if(!searchQuery.isEmpty())content.addView(text("搜索："+searchQuery+" · 更多中可清除筛选",12,false));
         if(photos.isEmpty()) {
-            banner(controller.inventory.raw>0?"未找到 JPEG 照片\n当前目录只有 RAW，请使用读卡器导入。":"相机中暂无可导入的 JPEG 照片");
+            banner(!controller.inventory.photos.isEmpty()?"没有符合搜索条件的照片，请在「更多 → 筛选照片」调整条件。":controller.inventory.raw>0?"未找到 JPEG 照片\n当前目录只有 RAW，请使用读卡器导入。":"相机中暂无可导入的 JPEG 照片");
             return;
         }
         LinearLayout actions=row(); content.addView(actions);
@@ -145,8 +146,16 @@ public final class MainActivity extends Activity {
         });tile.addView(check);
         TextView folder=text(photo.folder,11,false);folder.setTextColor(MUTED);tile.addView(folder);return tile;
     }
+    private void galleryFilters() {
+        EditText query=new EditText(this);query.setSingleLine(true);query.setHint("搜索文件名或文件夹");query.setContentDescription("搜索文件名或文件夹");query.setText(searchQuery);
+        query.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(128)});
+        new AlertDialog.Builder(this).setTitle("筛选照片").setView(query)
+            .setNegativeButton("取消",null).setNeutralButton("清除筛选",(d,w)->{searchQuery="";page=0;render(true);})
+            .setPositiveButton("应用",(d,w)->{searchQuery=query.getText().toString().trim();page=0;render(true);}).show();
+    }
     private void connectionOptions() {
         ArrayList<String> labels=new ArrayList<>();ArrayList<Runnable> actions=new ArrayList<>();
+        if(controller.connected){labels.add("筛选照片");actions.add(this::galleryFilters);}
         if(controller.connected){labels.add("刷新相机照片");actions.add(()->controller.connect(false));}
         labels.add("打开 Wi-Fi 设置");actions.add(()->startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS)));
         labels.add("试用演示照片");actions.add(()->controller.connect(true));
