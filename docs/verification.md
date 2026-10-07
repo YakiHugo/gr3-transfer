@@ -1,5 +1,28 @@
 # Verification and hardware handoff
 
+## Current evidence, October 7, 2026
+
+The current synthetic workflow is verified across desktop/browser and native Android. Historical notes below describe earlier checkpoints and are superseded by this summary where they conflict.
+
+- Desktop production/protocol/DOM tests: 145 passed. The release-publication change adds 15 fail-closed publisher contracts (160 total)
+- Real Chromium: 35 checks passed, including unchanged downloaded JPEG bytes, graceful pause/resume, cancellation/retry, receipt exports, selective cleanup, and 320px/390px layout. Seven generated-fixture screenshots were visually reviewed. [Final feature run](https://github.com/YakiHugo/gr3-transfer/actions/runs/37518465230)
+- Native Android production core, file recovery, and preview geometry/navigation/cache: 390 assertions passed; lint, application APK and instrumentation APK compile passed
+- Actual API29 emulator: 254 runtime assertions passed (76 main workflow, 59 gallery/tray, 73 fullscreen preview, 5 layout, 6+31+4 process restart/recovery). MediaStore writes are read back and SHA-256 checked before publication. Portrait and landscape screenshots were independently inspected. [Exact-head Android run](https://github.com/YakiHugo/gr3-transfer/actions/runs/37534501244)
+- Both Apple Silicon and Intel hosted Mac packages passed included-runtime launch, disconnected startup and exact original-byte smoke checks. This is hosted macOS execution, not a test on the user's Mac. [Desktop package run](https://github.com/YakiHugo/gr3-transfer/actions/runs/37518573964)
+- Desktop 50,000-frame filter/sort benchmark and native production gallery JVM benchmark were exercised separately; they are not camera throughput or phone rendering measurements
+
+The first new Android tools run found a test-harness window-attachment timing issue. The visible menu was present; initializing UiAutomation before opening windows resolved it without changing production behavior or weakening visible/enabled/clickable checks. All original assertions remain enabled.
+
+The preview publisher is main-only, requires the same run's Android/emulator and dual-Mac jobs, waits for exact-commit protocol/browser checks, verifies package and upload SHA-256, and keeps a release draft until every expected file is present. The APK is compared with the SHA-256 output from the successful emulator job, and all final assets and required workflow conclusions are checked again before publication. It never overwrites published assets or reuses private signing credentials. Each later preview needs a new package version and matching Android version; an already-published version is left intact. Publishing this release requires fresh checks of its own exact commit, even when earlier feature evidence is listed above.
+
+Still pending: physical GR III firmware/Wi-Fi behavior; comparison against actual card-reader originals; the user's Mac; actual Android phone networking, storage and gallery behavior. RAW transfer, other GR models and iOS are unsupported. Test APK signing may differ from previous developer builds; Mac previews are unsigned and unnotarized.
+
+### Interrupted publishing
+
+A matching same-source draft can resume using the retained artifacts from the same workflow run. Rerun only the failed publisher; rebuilding may generate different signed APK bytes and must not replace existing uploaded files. The publisher may remove only empty, expected-name GitHub `starter` placeholders left by an interrupted upload. All uploaded bytes are preserved. If main advances after a tag/draft is reserved, or a full rebuild differs, choose a new package preview version and matching Android versionCode/versionName. Old drafts or tags are never silently repointed.
+
+## Historical checkpoints
+
 ## Evidence boundary
 
 Everything in this workspace was tested with wholly synthetic JPEGs and injected camera responses. No user photos, physical GR III, macOS machine or real phone were available. Do not describe the fixture tests as hardware tests or deployment.

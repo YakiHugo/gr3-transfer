@@ -4,6 +4,12 @@
 
 > **测试版本**：目前仅支持型号明确为 **RICOH GR III** 的相机。尚未使用真实 GR III、Mac 或 Android 手机验证。演示图片是生成的测试素材，不是真实相机照片。本项目与理光官方无关联。
 
+## 已验证的测试包
+
+通过最终检查后，[预览版下载](https://github.com/YakiHugo/gr3-transfer/releases/tag/v0.2.0-preview.1) 提供 macOS Apple Silicon、Intel 便携包与 Android 10+ 测试 APK。包含来源提交、构建编号和 SHA-256 校验清单；只有全部上传核验完成后才公开该预览版。
+
+Mac 包未签名、未公证，不要绕过系统安全提示。APK 使用测试签名，可能不能覆盖旧测试包；升级前先保存暂存原片，确认相册副本可打开并完成备份；卸载会删除应用私有原片。无法导出时请保留旧应用。
+
 ## 电脑端
 
 需要 Node.js 22 或以上版本。运行应用不需要安装依赖、账号或 API 密钥。
@@ -72,7 +78,7 @@ npm start
 
 ```sh
 npm ci --ignore-scripts
-npm run check                         # 协议、原片字节、DOM 交互：129 项
+npm run check                         # 协议、原片字节、DOM、发布契约：160 项
 node scripts/benchmark-gallery.mjs    # 50,000 张合成照片的筛选与排序
 android/scripts/test-core.sh          # 无 SDK 的 Android 核心契约
 node android/scripts/audit-source.mjs # 网络与存储安全静态检查

@@ -1,6 +1,7 @@
 name: Build portable desktop previews
 on:
   workflow_dispatch:
+  workflow_call:
   pull_request:
     paths: ['src/**', 'public/**', 'fixtures/**', 'scripts/*desktop.mjs', '.github/workflows/desktop-preview.yml']
 permissions:
