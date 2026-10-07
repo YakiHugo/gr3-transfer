@@ -326,3 +326,9 @@ Tap a thumbnail or 「查看预览」 to open a full-screen native derivative vi
 Preview is explicitly a thumbnail, not an original-resolution claim. Original transfer and MediaStore byte handling are unchanged. Both byte and decoded-image preview caches are bounded to 24 entries, with each network derivative still limited to 2 MiB and decoded dimensions sampled to at most 640 pixels. No new endpoint, permission, camera setting or RAW request is introduced.
 
 Production geometry/navigation/cache tests and a native `preview` instrumentation phase cover fit/pan/zoom bounds, natural filtered navigation, in-preview selection, recreation, explicitly held-load cancellation, source replacement, and portrait/landscape screenshots. Exact-head emulator results are required before claiming runtime acceptance.
+
+### Current native runtime evidence and downloads
+
+Exact feature head `47c45277` (merged as `db62ac0c`) passed the full API29 emulator workflow: **254 assertions** (76 transfer/save, 59 gallery/tray tools, 73 full-screen preview, 5 layout, and 6+31+4 process-restart/recovery). [Successful run](https://github.com/YakiHugo/gr3-transfer/actions/runs/37534501244). Both portrait and landscape screenshots were independently reviewed. All **390 JVM assertions** also passed. This supersedes the pending-runtime status of the batch notes above; it does not establish physical phone or camera compatibility.
+
+The versioned preview workflow publishes the same current-run APK that its emulator installs and checks. It does not export, reuse or persist signing keys. A new debug identity can prevent in-place updates from an older test build. Save staged originals before any uninstall; app-private temporary files are removed by uninstall. Published MediaStore images are not intentionally deleted by this app's tray cleanup.

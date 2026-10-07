@@ -36,6 +36,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   emulator:
+    outputs:
+      tested-apk-sha256: ${{ steps.native-tests.outputs.apk-sha256 }}
     needs: android
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -54,7 +56,11 @@ jobs:
           name: gr-iii-transfer-android-debug
           path: android/app/build/outputs/apk
       - name: Run synthetic Android 10 UI, gallery tools and lifecycle checks
-        run: android/scripts/test-ci-emulator.sh
+        id: native-tests
+        run: |
+          android/scripts/test-ci-emulator.sh
+          apk_sha=$(sha256sum android/app/build/outputs/apk/debug/app-debug.apk | cut -d " " -f1)
+          printf 'apk-sha256=%s\n' "$apk_sha" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -62,3 +68,39 @@ jobs:
           path: android/build/native-smoke
           if-no-files-found: warn
           retention-days: 7
+
+  desktop-previews:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/desktop-preview.yml
+  publish-preview:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [android, emulator, desktop-previews]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: camera-transfer-macos-*
+          path: release-desktop
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: gr-iii-transfer-android-debug
+          path: release-android
+      - name: Publish only current-run verified test artifacts
+        uses: actions/github-script@v7
+        env:
+          TESTED_APK_SHA256: ${{ needs.emulator.outputs.tested-apk-sha256 }}
+        with:
+          script: |
+            const { pathToFileURL } = require('node:url');
+            const { readFile } = require('node:fs/promises');
+            const { publishPreview } = await import(pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/publish-preview.mjs`));
+            const { version } = JSON.parse(await readFile('package.json', 'utf8'));
+            await publishPreview({ github, context, core, version, testedApkSha256: process.env.TESTED_APK_SHA256 });
