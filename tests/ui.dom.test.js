@@ -189,7 +189,7 @@ test('DOM: mobile transfer control selects originals and directs to transfer tra
   const h = await harness(t); await h.demo(); h.click('.photo-select input');
   assert.equal(h.$('#mobile-selection').hidden, false); assert.equal(h.$('#mobile-selection-count').textContent, '1');
   h.click('#mobile-transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'ready');
-  assert.equal(h.blobs.size, 1); h.click('#clear-selection'); assert.equal(h.$('#mobile-selection').hidden, true);
+  assert.equal(h.blobs.size, 1); h.click('#clear-selection'); assert.equal(h.$('#mobile-selection').hidden, false); assert.equal(h.$('#mobile-show-transfers').hidden, false);
 });
 
 test('DOM: unknown real-camera metadata remains explicitly unknown', async t => {
@@ -377,7 +377,7 @@ test('DOM: cancelled active transfer retries without restarting the remaining ca
     } }), { headers: { 'Content-Type': 'image/jpeg', 'X-File-Size': original.length } });
   }});
   await h.demo(); h.click('#select-visible'); h.click('#transfer'); await until(() => reads === 1);
-  h.click('#cancel-queue'); await until(() => h.all('.queue-item[data-state="cancelled"]').length === 12 && !h.$('#transfer').disabled);
+  h.click('#cancel-queue'); await until(() => h.all('.queue-item[data-state="cancelled"]').length === 12 && !h.$('#retry-unfinished').disabled);
   h.click('.queue-item[data-state="cancelled"] .queue-item-top button');
   await until(() => h.all('.queue-item[data-state="ready"]').length === 1);
   assert.equal(reads, 2); assert.equal(h.all('.queue-item[data-state="cancelled"]').length, 11);
@@ -1062,4 +1062,93 @@ test('DOM: ZIP handoff immediately enables selective cleanup and updates status 
   h.change('#queue-filter','ready'); assert.equal(h.all('.queue-item').length,0);
   h.change('#queue-filter','handed'); assert.equal(h.all('.queue-item').length,1);
   h.click('#clear-handed'); assert.equal(h.$('#queue-count').textContent,'0');
+});
+
+test('DOM: next-step guidance distinguishes selection, received bytes, and browser handoff', async t => {
+  const h = await harness(t);
+  assert.equal(h.$('#step-connect').getAttribute('aria-current'), 'step');
+  await h.demo();
+  assert.equal(h.$('#step-select').getAttribute('aria-current'), 'step');
+  h.click('.photo-select input');
+  assert.match(h.$('#workflow-title').textContent, /已选好 1 张/);
+  h.click('#transfer'); await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  assert.equal(h.$('#step-save').getAttribute('aria-current'), 'step');
+  assert.match(h.$('#workflow-title').textContent, /1 张原片等待保存/);
+  assert.equal(h.$('#batch-received').textContent, '1');
+  assert.equal(h.$('#batch-progress').value, 1);
+  assert.equal(h.$('#transfer').disabled, true, 'already queued selections cannot start duplicate transfers');
+  assert.equal(h.$('.photo-transfer-state').textContent, '待保存');
+  h.click('.queue-item-top button');
+  assert.match(h.$('#workflow-title').textContent, /检查下载文件夹/);
+  assert.match(h.$('#workflow-description').textContent, /不代表已写入磁盘/);
+  assert.equal(h.$('.photo-transfer-state').textContent, '已交给浏览器');
+});
+
+test('DOM: selection review includes hidden folders and removes only the explicit frame', async t => {
+  const h = await harness(t); await h.demo();
+  h.change('#folder', '100RICOH'); h.click('#select-visible');
+  h.change('#folder', '101RICOH'); h.click('.photo-select input');
+  const reads = h.requests.filter(path => path.endsWith('/original')).length;
+  h.click('#review-selection');
+  assert.equal(h.$('#selection-dialog').open, true);
+  assert.equal(h.all('.selection-review-item').length, 7);
+  assert.match(h.$('#selection-review-summary').textContent, /7 张新传输/);
+  h.click('.selection-review-item button');
+  assert.equal(h.$('#selection-count').textContent, '6');
+  assert.equal(h.all('.selection-review-item').length, 6);
+  assert.equal(h.requests.filter(path => path.endsWith('/original')).length, reads);
+  h.click('#review-back');
+  assert.equal(h.$('#selection-dialog').open, false);
+  assert.equal(h.$('#selection-count').textContent, '6');
+  h.click('#review-selection'); h.click('[aria-label="关闭已选照片"]');
+  assert.equal(h.window.document.body.classList.contains('has-modal'), false);
+});
+
+test('DOM: selection review is bounded and paginated independently of gallery filters', async t => {
+  const adapter = { connect: async () => ({ properties: { model: 'RICOH GR III' }, photos: Array.from({length: 49}, (_, i) => ({id: i.toString(16).padStart(24, '0'), folder: '100RICOH', name: `R${i}.JPG`, bytes: 1024})) }) };
+  const h = await harness(t, {adapter}); h.click('#landing-connect'); h.click('#confirm-connect');
+  await until(() => h.all('.photo-card').length === 24 && !h.$('#refresh').disabled);
+  h.click('#select-visible'); h.click('#pagination button:last-child'); h.click('#select-visible');
+  h.click('#review-selection'); assert.equal(h.all('.selection-review-item').length, 24);
+  assert.equal(h.$('#review-page').textContent, '1 / 2'); h.click('#review-next');
+  assert.equal(h.$('#review-page').textContent, '2 / 2');
+  assert.equal(h.all('.selection-review-item').length, 24);
+  assert.equal(h.$('#review-next').disabled, true);
+  h.click('#review-previous'); assert.equal(h.$('#review-page').textContent, '1 / 2');
+});
+
+test('DOM: density switches keep selections, preview source, and transport requests unchanged', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input');
+  const reads = h.requests.length, src = h.$('.photo-image-button img').src;
+  h.click('#density-compact');
+  assert.equal(h.$('#gallery').classList.contains('compact-grid'), true);
+  assert.equal(h.$('#density-compact').getAttribute('aria-pressed'), 'true');
+  assert.equal(h.$('#density-comfort').getAttribute('aria-pressed'), 'false');
+  assert.equal(h.$('#selection-count').textContent, '1');
+  assert.equal(h.$('.photo-image-button img').src, src);
+  assert.equal(h.requests.length, reads);
+  h.click('#density-comfort'); assert.equal(h.$('#gallery').classList.contains('compact-grid'), false);
+});
+
+test('DOM: batch guidance counts ZIP handoff correctly and retains a useful mobile action', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#transfer');
+  await until(() => h.$('.queue-item')?.dataset.state === 'ready');
+  h.click('#build-archive'); await until(() => !h.$('#save-archive').hidden); h.click('#save-archive');
+  assert.doesNotMatch(h.$('#queue-summary').textContent, /待保存/);
+  assert.match(h.$('#queue-summary').textContent, /1 张已交给浏览器/);
+  assert.match(h.$('#workflow-title').textContent, /检查下载文件夹/);
+  h.click('#clear-selection');
+  assert.equal(h.$('#mobile-selection').hidden, false);
+  assert.equal(h.$('#mobile-transfer').hidden, true);
+  assert.equal(h.$('#mobile-show-transfers').hidden, false);
+});
+
+test('DOM: camera-returned battery is explicit and absent in demo without extra camera reads', async t => {
+  const adapter = { connect: async () => ({properties: {model: 'RICOH GR III', battery: 12}, photos: []}) };
+  const h = await harness(t, {adapter}); h.click('#landing-connect'); h.click('#confirm-connect');
+  await until(() => !h.$('#workspace').hidden && !h.$('#refresh').disabled);
+  assert.match(h.$('#source-battery').textContent, /相机返回电量 12%.*建议充电/);
+  assert.equal(h.$('#source-battery').hidden, false);
+  h.click('#disconnect'); await until(() => !h.$('#try-demo').disabled); await h.demo();
+  assert.equal(h.$('#source-battery').hidden, true);
 });
