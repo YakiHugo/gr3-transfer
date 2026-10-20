@@ -78,16 +78,51 @@ export function safeCameraProperties(data) {
   };
 }
 
-/** One in-flight camera read. Cancellation removes queued work before it contacts the camera. */
+/**
+ * One in-flight read. Explicit foreground reads jump unstarted thumbnails;
+ * an active response is never interrupted and cancelled queued work is removed.
+ * FIFO is preserved within each priority. After three foreground reads, serve
+ * one waiting background read so browsing cannot starve indefinitely.
+ */
 export class ReadQueue {
-  #tail = Promise.resolve();
-  async run(fn, signal) {
-    const previous = this.#tail;
-    let release;
-    this.#tail = new Promise(resolve => { release = resolve; });
-    await previous;
-    try { signal?.throwIfAborted(); return await fn(); }
-    finally { release(); }
+  #pending = [];
+  #active = false;
+  #foregroundStreak = 0;
+
+  run(fn, signal, priority = 0) {
+    if (signal?.aborted) return Promise.reject(signal.reason);
+    return new Promise((resolve, reject) => {
+      const entry = { fn, signal, priority, resolve, reject, abort: null };
+      entry.abort = () => {
+        const index = this.#pending.indexOf(entry);
+        if (index < 0) return;
+        this.#pending.splice(index, 1);
+        signal.removeEventListener('abort', entry.abort);
+        reject(signal.reason);
+      };
+      signal?.addEventListener('abort', entry.abort, { once: true });
+      this.#pending.push(entry);
+      this.#drain();
+    });
+  }
+
+  async #drain() {
+    if (this.#active || !this.#pending.length) return;
+    const background = this.#pending.findIndex(entry => entry.priority <= 0);
+    let index = 0;
+    if (this.#foregroundStreak >= 3 && background >= 0) index = background;
+    else for (let i = 1; i < this.#pending.length; i++) if (this.#pending[i].priority > this.#pending[index].priority) index = i;
+    const entry = this.#pending.splice(index, 1)[0];
+    entry.signal?.removeEventListener('abort', entry.abort);
+    this.#foregroundStreak = entry.priority > 0 ? this.#foregroundStreak + 1 : 0;
+    this.#active = true;
+    try { entry.signal?.throwIfAborted(); entry.resolve(await entry.fn()); }
+    catch (error) { entry.reject(error); }
+    finally {
+      this.#active = false;
+      // Let the completed caller enqueue its next foreground read first.
+      queueMicrotask(() => this.#drain());
+    }
   }
 }
 
@@ -148,7 +183,7 @@ export class CameraAdapter {
         if (error?.name === 'TimeoutError') throw new AppError('The camera response timed out. Keep it awake and retry.', 'CAMERA_TIMEOUT', 504);
         throw new AppError('The camera response was incomplete or unfamiliar. Retry the connection.', 'INVALID_CAMERA_RESPONSE');
       }
-    }, signal);
+    }, signal, 1);
   }
 
   async connect(signal) {
@@ -175,7 +210,16 @@ export class CameraAdapter {
     const path = `/photos/${encodeURIComponent(photo.folder)}/${encodeURIComponent(photo.name)}${variant === 'thumbnail' ? '?size=thumb' : variant === 'preview' ? '?size=view' : ''}`;
     return this.queue.run(async () => {
       const response = await this.request(path, signal, this.streamTimeout);
-      return consume(response);
-    }, signal);
+      try {
+        // Fetch resolves at headers, but the body can still time out or lose
+        // the camera before pipeJpeg sends a JPEG prefix to the browser.
+        return await consume(response);
+      } catch (error) {
+        if (error instanceof AppError) throw error;
+        if (signal?.aborted) throw new AppError('This operation was cancelled.', 'CANCELLED', 409);
+        if (error?.name === 'TimeoutError') throw new AppError('The camera response timed out. Keep it awake and retry.', 'CAMERA_TIMEOUT', 504);
+        throw new AppError('The camera connection ended while reading the photo. Keep it awake and retry.', 'CAMERA_UNREACHABLE', 503);
+      }
+    }, signal, variant === 'original' ? 2 : variant === 'preview' ? 1 : 0);
   }
 }

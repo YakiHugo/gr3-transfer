@@ -11,6 +11,7 @@ const DOWNLOAD_LEASE_LIMIT = MEMORY_LIMIT + 1024 * 1024;
 const state = { session: null, photos: [], selected: new Set(), page: 1, busy: true, connecting: false, generation: 0, queue: [], running: false, pauseRequested: false, controller: null, previewId: null, retained: 0, requestController: new AbortController(), restoreClearedTray: false, verifying: false, batchVerifying: false, receiptController: null, exporting: false, archive: null, archiveController: null, downloadLeases: new Map(), leasedBytes: 0 };
 let entryId = 0;
 let unloadGuardActive = false;
+let reviewPage = 1;
 // Reuse locale collation and one derived list, rather than sorting the whole card
 // again for every selection, preview toggle or page navigation.
 const photoNameCollator = new Intl.Collator('zh-CN', { numeric: true });
@@ -121,8 +122,12 @@ function updateControls() {
   $('save-archive').hidden = !state.archive;
   $('save-archive').disabled = state.exporting || state.verifying;
   $('cancel-archive').hidden = !state.exporting;
-  $('transfer').disabled = blocked || !state.selected.size;
-  $('mobile-transfer').disabled = blocked || !state.selected.size;
+  const plan = transferPlan();
+  const transferDisabled = blocked || !state.session?.connected || !plan.additions.length || Boolean(plan.blocked);
+  $('transfer').disabled = transferDisabled;
+  $('mobile-transfer').disabled = transferDisabled;
+  $('review-transfer').disabled = transferDisabled;
+  $('review-selection').disabled = !state.selected.size || !state.session?.connected;
   $('clear-queue').disabled = blocked;
   $('clear-handed').disabled = blocked;
   $('clear-handed').hidden = !state.queue.some(entry => entry.status === 'handed-off' || entry.archiveHandedOff);
@@ -137,6 +142,7 @@ function updateControls() {
   $('cancel-connect').hidden = !state.connecting;
   $('confirm-connect').textContent = state.busy && $('connect-dialog').open ? '正在连接…' : '连接相机';
   $('refresh').setAttribute('aria-busy', String(state.busy));
+  renderWorkflow();
 }
 function release(entry) {
   entry.receipt = null;
@@ -203,6 +209,10 @@ function renderSession() {
     $('source-state').replaceChildren(element('i'), document.createTextNode(session.mode === 'demo' ? '演示模式' : '本机连接'));
     $('gallery-description').textContent = session.mode === 'demo' ? '先用示例图片体验选择、传输与保存。' : '选择喜欢的照片，带走完整原片。';
   }
+  const battery = session?.mode === 'camera' && Number.isFinite(session.battery) ? session.battery : null;
+  $('source-battery').hidden = battery === null;
+  $('source-battery').textContent = battery === null ? '' : `相机返回电量 ${battery}%${battery < 20 ? ' · 建议充电后传输' : ''}`;
+  $('source-battery').classList.toggle('low', battery !== null && battery < 20);
   updateControls();
 }
 function applyPhotos(result) {
@@ -246,6 +256,7 @@ function showConnectionAdvice(code, stage) {
 }
 async function connect(mode) {
   if (state.busy || state.running || state.exporting || state.verifying) return;
+  closeDialog($('selection-dialog'));
   state.connecting = true;
   setBusy(true);
   const generation = ++state.generation;
@@ -329,6 +340,7 @@ async function disconnect() {
     galleryCache = null;
     state.selected.clear();
     closeDialog($('preview-dialog'));
+    closeDialog($('selection-dialog'));
     renderQueue();
     renderSession();
     notify('已断开连接。已完成的原片仍可保存，未完成的传输已取消。');
@@ -405,8 +417,136 @@ function renderSelection() {
     $('preview-select').setAttribute('aria-pressed', String(selected));
     renderPreviewNavigation();
   }
+  if ($('selection-dialog').open) renderSelectionReview();
   updateControls();
 }
+
+/** Derive the next step from retained bytes, never from a successful download click. */
+function renderWorkflow() {
+  const connected = Boolean(state.session?.connected);
+  const received = state.queue.filter(entry => entry.blob).length;
+  const unsaved = state.queue.filter(unhandedOriginal).length;
+  const stopped = state.queue.filter(unfinished).length;
+  const waiting = state.queue.filter(entry => entry.status === 'queued').length;
+  const plan = transferPlan();
+  const step = state.queue.length ? 'save' : connected ? 'select' : 'connect';
+  for (const name of ['connect', 'select', 'save']) {
+    const node = $('step-' + name);
+    if (name === step) node.setAttribute('aria-current', 'step'); else node.removeAttribute('aria-current');
+    node.classList.toggle('complete', connected && name === 'connect');
+  }
+  let title = '挑选喜欢的照片', description = '轻点照片查看预览，勾选后加入这一批。原片不会被裁切或压缩。', action = 'review', label = '查看已选照片';
+  if (state.running) {
+    title = state.pauseRequested ? '本张完成后暂停' : '原片正在逐张抵达';
+    description = `已接收 ${received} / ${state.queue.length} 张。可以继续选片；关闭页面会中断传输。`;
+    action = 'all'; label = '查看传输进度';
+  } else if (unsaved) {
+    title = `${unsaved} 张原片等待保存`;
+    description = stopped ? `另有 ${stopped} 张未完成。先保存已收到的原片，再处理重试。` : '原片已在本页暂存，还没有保存到电脑。请下载后检查文件。';
+    action = 'ready'; label = '去保存原片';
+  } else if (waiting) {
+    title = '这一批已暂停'; description = `还有 ${waiting} 张等待传输。${stopped ? `另有 ${stopped} 张未完成，可重试并继续这一批。` : '已收到的原片仍会保留。'}`;
+    action = 'waiting'; label = '查看待传输';
+  } else if (stopped) {
+    title = `${stopped} 张照片未完成`; description = '已完成原片会保留。检查相机 Wi-Fi 后，只重试未完成项。';
+    action = 'unfinished'; label = '处理未完成项';
+  } else if (plan.additions.length) {
+    title = `已选好 ${plan.additions.length} 张新照片`;
+    description = plan.blocked || '可以先查看整批选择，包含当前筛选以外的照片。传输不会修改相机文件。';
+  } else if (state.queue.length) {
+    title = '最后一步：检查下载文件夹';
+    description = '文件已交给浏览器，不代表已写入磁盘。确认副本可打开后，再清理本页暂存。';
+    action = 'all'; label = '查看保存记录';
+  }
+  $('workflow-title').textContent = title;
+  $('workflow-description').textContent = description;
+  $('workflow-action').hidden = !state.selected.size && !state.queue.length;
+  $('workflow-action').textContent = label;
+  $('workflow-action').dataset.action = action;
+  $('workflow-action').disabled = state.busy;
+  $('batch-received').textContent = String(received);
+  $('batch-total').textContent = String(state.queue.length);
+  $('batch-progress').max = Math.max(1, state.queue.length);
+  $('batch-progress').value = received;
+  $('batch-guidance').textContent = unsaved ? `${unsaved} 张待保存 · 接收完成不等于已写入磁盘` : received ? '已交给浏览器，请检查下载文件夹。' : '仅完整接收的 JPEG 才能保存；失败文件不会发布。';
+  $('back-to-photos').hidden = !connected;
+  const mobileQueue = state.running || (!plan.additions.length && state.queue.length > 0);
+  $('mobile-selection').hidden = !connected || (!state.selected.size && !state.queue.length);
+  document.body.classList.toggle('has-selection', !$('mobile-selection').hidden);
+  $('mobile-transfer').hidden = Boolean(mobileQueue);
+  $('mobile-show-transfers').hidden = !mobileQueue;
+  $('mobile-selection-count').textContent = mobileQueue ? String(state.running ? received : unsaved || received || state.queue.length) : String(state.selected.size);
+  $('mobile-selection-label').textContent = mobileQueue ? unsaved ? ' 张待保存' : state.running ? ' 张已接收' : ' 项传输记录' : ' 张已选';
+  $('mobile-show-transfers').textContent = unsaved && !state.running ? '去保存原片' : '查看传输';
+  updateMobileDock();
+}
+function updateMobileDock() {
+  const rect = $('queue-panel').getBoundingClientRect();
+  // The desk already exposes save/pause/retry. Avoid covering those controls
+  // with a redundant fixed navigation bar, particularly on short screens.
+  document.body.classList.toggle('viewing-transfer-desk', !$('queue-panel').hidden && rect.top < window.innerHeight * .65 && rect.bottom > 80);
+}
+let dockFrame = 0;
+function scheduleMobileDock() {
+  if (dockFrame) return;
+  dockFrame = requestAnimationFrame(() => { dockFrame = 0; updateMobileDock(); });
+}
+window.addEventListener('scroll', scheduleMobileDock, { passive: true });
+window.addEventListener('resize', scheduleMobileDock);
+function showTransfers(filter = 'all') {
+  if (!state.queue.length) return;
+  $('queue-filter').value = filter;
+  renderQueue();
+  $('queue-panel').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
+  $('queue-panel').focus({ preventScroll: true });
+}
+function updatePhotoStates() {
+  const entries = new Map(state.queue.filter(currentSource).map(entry => [entry.photo.id, entry]));
+  for (const card of $('gallery').children) {
+    let badge = card.querySelector('.photo-transfer-state');
+    const entry = entries.get(card.dataset.photoId);
+    if (!entry) { badge?.remove(); delete card.dataset.transferState; continue; }
+    if (!badge) { badge = element('span', 'photo-transfer-state'); card.querySelector('.photo-image-button').append(badge); }
+    card.dataset.transferState = entry.status;
+    badge.textContent = entry.archiveHandedOff || entry.status === 'handed-off' ? '已交给浏览器' : entry.status === 'ready' ? '待保存' : entry.status === 'transferring' ? '传输中' : entry.status === 'queued' ? '已入队' : '需处理';
+  }
+}
+function renderSelectionReview() {
+  const chosen = state.photos.filter(photo => state.selected.has(photo.id));
+  const pages = Math.max(1, Math.ceil(chosen.length / PAGE_SIZE));
+  reviewPage = Math.min(Math.max(1, reviewPage), pages);
+  const list = $('selection-review-list');
+  list.replaceChildren();
+  for (const photo of chosen.slice((reviewPage - 1) * PAGE_SIZE, reviewPage * PAGE_SIZE)) {
+    const row = element('article', 'selection-review-item');
+    const image = element('img'); image.alt = ''; image.loading = 'lazy';
+    try { image.src = safeLocalUrl(photo.thumbnailUrl); } catch { image.hidden = true; }
+    const info = element('div');
+    info.append(element('strong', '', photo.name), element('p', '', `${photo.folder} · ${bytes(photo.bytes)}`));
+    const remove = element('button', 'text-button', '取消选择'); remove.type = 'button';
+    remove.setAttribute('aria-label', `取消选择 ${photo.folder}/${photo.name}`);
+    remove.addEventListener('click', () => {
+      if (!state.photos.includes(photo)) return;
+      const index = [...list.children].indexOf(row);
+      state.selected.delete(photo.id); renderGallery();
+      const next = list.children[Math.min(index, list.children.length - 1)]?.querySelector('button') || $('review-back');
+      next.focus({ preventScroll: true });
+    });
+    row.append(image, info, remove); list.append(row);
+  }
+  const plan = transferPlan();
+  $('selection-review-summary').textContent = `已选 ${chosen.length} 张 · ${plan.additions.length} 张新传输${plan.duplicates ? ` · ${plan.duplicates} 张已在暂存台` : ''}`;
+  $('selection-review-plan').textContent = plan.blocked || (plan.unknown ? `${plan.unknown} 张大小未知。传输时逐张检查 128 MB 单片与 256 MB 暂存上限，不保证整批可容纳。` : `新传输约 ${bytes(plan.knownBytes)}。只有点击“传输原片”才会读取原片。`);
+  $('selection-review-empty').hidden = chosen.length > 0;
+  $('selection-review-pagination').hidden = pages <= 1;
+  $('review-page').textContent = `${reviewPage} / ${pages}`;
+  $('review-previous').disabled = reviewPage <= 1; $('review-next').disabled = reviewPage >= pages;
+}
+function reviewSelection() {
+  if (!state.session?.connected || !state.selected.size) return;
+  reviewPage = 1; renderSelectionReview(); openDialog($('selection-dialog')); updateControls();
+}
+
 function attachThumbnailRecovery(image, photo, card) {
   const generation = state.generation;
   const recovery = element('div', 'thumbnail-recovery');
@@ -480,6 +620,7 @@ function renderGallery() {
   $('empty-description').textContent = state.photos.length ? ($('selected-only').checked ? '已选照片中没有符合筛选条件的项目。取消“只看已选”可继续选片。' : '试试其他文件名或文件夹。') : state.cardSummary?.raw ? '存储卡列表只有 RAW，没有 JPEG。目前不支持 RAW 传输，请使用读卡器或原有 RAW 工具。此应用不会转换 RAW 或修改相机设置。' : '相机没有返回 JPEG 照片，请检查相机后刷新。';
   $('reset-filters').hidden = !state.photos.length;
   renderPagination(list.length);
+  updatePhotoStates();
   renderSelection();
 }
 function renderPagination(total) {
@@ -744,29 +885,33 @@ function renderQueue() {
   if ($('unqueued-only').checked && state.session?.connected) renderGallery();
   updateQueueSummary();
   renderRecovery();
+  updatePhotoStates();
   placeTray();
   updateControls();
 }
 function updateQueueSummary() {
   $('queue-count').textContent = `${state.queue.length}`;
-  const ready = state.queue.filter(entry => entry.status === 'ready').length;
-  const handed = state.queue.filter(entry => entry.status === 'handed-off').length;
+  const ready = state.queue.filter(unhandedOriginal).length;
+  const handed = state.queue.filter(entry => entry.status === 'handed-off' || entry.archiveHandedOff).length;
   const failed = state.queue.filter(entry => entry.status === 'failed').length;
   const cancelled = state.queue.filter(entry => entry.status === 'cancelled').length;
   const waiting = state.queue.filter(entry => entry.status === 'queued').length;
   const parts = [state.running && (state.pauseRequested ? '本张完成后暂停' : '正在逐张传输'), !state.running && waiting && '已暂停，可继续传输', ready && `${ready} 张待保存`, handed && `${handed} 张已交给浏览器`, waiting && `${waiting} 张等待中`, failed && `${failed} 张失败`, cancelled && `${cancelled} 张已取消`].filter(Boolean);
   $('queue-summary').textContent = parts.join(' · ') || '暂无传输';
+  renderWorkflow();
 }
 function renderRecovery() {
   const stopped = state.queue.filter(unfinished);
   const eligible = stopped.filter(canRetry);
   $('queue-recovery').hidden = !stopped.length || state.running;
   $('retry-unfinished').hidden = !eligible.length;
-  $('retry-unfinished').textContent = `重试未完成项（${eligible.length}）`;
+  const waiting = state.queue.filter(entry => entry.status === 'queued' && currentSource(entry)).length;
+  $('retry-unfinished').textContent = waiting ? `重试并继续（${eligible.length + waiting}）` : `重试未完成项（${eligible.length}）`;
   const notes = [];
   if (eligible.length) {
     if (state.session?.mode === 'camera') notes.push('请先恢复相机 Wi-Fi。');
     notes.push('从头重试本次连接中失败或取消的文件，已完成原片会保留。');
+    if (waiting) notes.push(`随后继续 ${waiting} 张尚未开始的照片。`);
   }
   const stale = stopped.filter(entry => !currentSource(entry)).length;
   const expired = stopped.filter(entry => currentSource(entry) && entry.retryable === false).length;
@@ -785,8 +930,9 @@ function retryEntries(entries) {
     entry.status = 'queued'; entry.error = ''; entry.received = 0;
     entry.expected = knownSize(entry.photo.bytes) ? entry.photo.bytes : null;
   });
-  // runQueue invalidates any partial ZIP and sets the running guard synchronously.
-  runQueue();
+  // Batch retry explicitly continues waiting entries; a row retry affects only
+  // that row. runQueue invalidates partial ZIPs and guards synchronously.
+  runQueue(entries === state.queue ? null : eligible);
 }
 function updateEntryProgress(entry) {
   const row = $(`queue-${entry.id}`);
@@ -798,7 +944,7 @@ function updateEntryProgress(entry) {
 async function transferEntry(entry, signal, generation) {
   const attempt = ++entry.attempts;
   entry.startedAt = performance.now(); entry.finishedAt = null; entry.archiveHandedOff = false;
-  entry.status = 'transferring'; entry.received = 0; entry.error = ''; entry.retryable = true;
+  entry.status = 'transferring'; entry.received = 0; entry.error = ''; entry.retryable = true; entry.connectionInterrupted = false;
   entry.expected = knownSize(entry.photo.bytes) ? entry.photo.bytes : null;
   renderQueue();
   const progressTimer = setInterval(() => {
@@ -813,6 +959,7 @@ async function transferEntry(entry, signal, generation) {
     response = await fetch(safeLocalUrl(entry.photo.originalUrl), { signal, cache: 'no-store', credentials: 'same-origin' });
     if (!response.ok) {
       const failure = await response.json().catch(() => ({}));
+      entry.connectionInterrupted = ['CAMERA_UNREACHABLE', 'CAMERA_TIMEOUT', 'CAMERA_HTTP_ERROR', 'BRIDGE_ERROR'].includes(failure.code);
       if (['STALE_SESSION', 'PHOTO_NOT_FOUND', 'DISCONNECTED'].includes(failure.code)) entry.retryable = false;
       throw new Error(`${cameraErrorMessage(failure.code, response.status)}${entry.retryable ? '' : ' 请重新连接并选择这张照片，此旧传输无法重试。'}`);
     }
@@ -857,10 +1004,11 @@ async function transferEntry(entry, signal, generation) {
     // a ready file produced by a subsequent retry if the disconnect request failed.
     if (generation !== state.generation || attempt !== entry.attempts) return;
     entry.status = signal.aborted || error.name === 'AbortError' ? 'cancelled' : 'failed';
+    if (entry.status === 'failed' && error.name === 'TypeError') entry.connectionInterrupted = true;
     entry.error = entry.status === 'failed' ? `${userError(error) || '连接中断，未生成文件。'}${entry.attempts >= MAX_ATTEMPTS ? ' 已达到重试上限，请检查连接后移除并重新选择。' : ''}` : '';
   } finally { clearInterval(progressTimer); if (reader) { try { reader.releaseLock(); } catch { /* Reader already released. */ } } }
 }
-async function runQueue() {
+async function runQueue(onlyEntries = null) {
   if (state.running || state.busy || state.exporting || state.verifying) return;
   // A retry can add a ready file to a previously packaged partial batch.
   invalidateArchive();
@@ -871,17 +1019,22 @@ async function runQueue() {
   renderQueue();
   try {
     for (const entry of state.queue) {
+      if (onlyEntries && !onlyEntries.includes(entry)) continue;
       if (signal.aborted || state.pauseRequested || generation !== state.generation) break;
       if (!currentSource(entry)) { if (entry.status === 'queued') entry.status = 'cancelled'; continue; }
       if (entry.status === 'queued') {
         await transferEntry(entry, signal, generation);
         if (generation !== state.generation) break;
+        if (entry.status === 'failed' && entry.connectionInterrupted && state.queue.some(item => item.status === 'queued' && currentSource(item))) {
+          state.pauseRequested = true;
+          notify('连接中断，已暂停后续传输。已收到的原片会保留；检查连接后可重试未完成项，或继续尚未开始的照片。', true);
+        }
         renderQueue();
       }
     }
   } finally {
     if (generation === state.generation) {
-      if (!state.pauseRequested || signal.aborted) state.queue.filter(entry => entry.status === 'queued').forEach(entry => { entry.status = 'cancelled'; });
+      if (!state.pauseRequested || signal.aborted) state.queue.filter(entry => entry.status === 'queued' && (!onlyEntries || onlyEntries.includes(entry))).forEach(entry => { entry.status = 'cancelled'; });
       state.pauseRequested = false;
       state.running = false; state.controller = null; renderQueue();
     }
@@ -966,6 +1119,28 @@ function saveArchive() {
     $('archive-status').textContent = `ZIP 已交给浏览器（${state.archive.count} 张原片）。请检查下载文件夹和校验清单，此处无法确认是否已写入磁盘。`;
   } catch (error) { $('archive-status').textContent = `未能将 ZIP 交给浏览器。${userError(error)}`; }
 }
+
+
+$('review-selection').addEventListener('click', reviewSelection);
+$('review-back').addEventListener('click', () => closeDialog($('selection-dialog')));
+$('review-previous').addEventListener('click', () => { reviewPage--; renderSelectionReview(); });
+$('review-next').addEventListener('click', () => { reviewPage++; renderSelectionReview(); });
+$('review-transfer').addEventListener('click', () => {
+  if ($('review-transfer').disabled) return;
+  closeDialog($('selection-dialog')); addToQueue(); showTransfers();
+});
+$('workflow-action').addEventListener('click', () => {
+  const action = $('workflow-action').dataset.action;
+  if (action === 'review') reviewSelection(); else showTransfers(action);
+});
+$('mobile-show-transfers').addEventListener('click', () => showTransfers(state.queue.some(unhandedOriginal) && !state.running ? 'ready' : 'all'));
+$('back-to-photos').addEventListener('click', () => {
+  $('search').scrollIntoView({ block: 'center', behavior: 'instant' }); $('search').focus({ preventScroll: true });
+});
+for (const density of ['comfort', 'compact']) $('density-' + density).addEventListener('click', () => {
+  $('gallery').classList.toggle('compact-grid', density === 'compact');
+  for (const name of ['comfort', 'compact']) $('density-' + name).setAttribute('aria-pressed', String(density === name));
+});
 
 $('try-demo').addEventListener('click', () => connect('demo'));
 for (const id of ['landing-connect', 'switch-camera']) $(id).addEventListener('click', () => { $('connect-error').hidden = true; openDialog($('connect-dialog')); });

@@ -288,3 +288,70 @@ test('inventory: entry budget spans folders rather than resetting for each folde
   const files=Array(50001).fill('R1.JPG');
   assert.throws(() => parsePhotoList({dirs:[{name:'100RICOH',files},{name:'101RICOH',files}]}),e=>e.code==='LIST_TOO_LARGE');
 });
+
+test('foreground reads skip queued thumbnails without interrupting an active response', async () => {
+  const queue = new ReadQueue(), order = []; let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let active = 0, maxActive = 0;
+  const task = (name, wait) => async () => { maxActive = Math.max(maxActive, ++active); order.push(name); if (wait) await wait; active--; };
+  const first = queue.run(task('active-thumbnail', gate), undefined, 0);
+  const thumbnail = queue.run(task('queued-thumbnail'), undefined, 0);
+  const preview = queue.run(task('preview'), undefined, 1);
+  const original = queue.run(task('original'), undefined, 2);
+  assert.deepEqual(order, ['active-thumbnail']);
+  release(); await Promise.all([first, thumbnail, preview, original]);
+  assert.deepEqual(order, ['active-thumbnail', 'original', 'preview', 'queued-thumbnail']);
+  assert.equal(maxActive, 1);
+});
+
+test('priority reads keep FIFO peers, service background work, and remove cancelled work', async () => {
+  const queue = new ReadQueue(), order = []; let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const first = queue.run(async () => { order.push('active'); await gate; });
+  const background = queue.run(() => order.push('thumbnail'));
+  const cancelled = new AbortController();
+  const abandoned = queue.run(() => assert.fail('cancelled read started'), cancelled.signal, 2);
+  const rejected = assert.rejects(abandoned, {name: 'AbortError'});
+  const foreground = Array.from({length: 5}, (_, i) => queue.run(() => order.push('original-' + i), undefined, 2));
+  cancelled.abort(); release(); await Promise.all([first, background, rejected, ...foreground]);
+  assert.deepEqual(order, ['active', 'original-0', 'original-1', 'original-2', 'thumbnail', 'original-3', 'original-4']);
+});
+
+test('a rejected foreground read releases the queue and pre-aborted work never enters it', async () => {
+  const queue = new ReadQueue(), cancelled = new AbortController(); cancelled.abort();
+  await assert.rejects(queue.run(() => assert.fail('pre-aborted read started'), cancelled.signal, 2), {name: 'AbortError'});
+  await assert.rejects(queue.run(() => { throw new Error('synthetic failure'); }, undefined, 2), /synthetic failure/);
+  assert.equal(await queue.run(() => 'next'), 'next');
+});
+
+for (const prefixBytes of [0, 2]) {
+  test(`camera body error after headers and ${prefixBytes} JPEG prefix bytes preserves network error classification`, async t => {
+    const adapter = new CameraAdapter({ fetchImpl: async url => {
+      if (url.endsWith('/props')) return data({model: 'RICOH GR III'});
+      if (url.endsWith('/photos')) return data({dirs: [{name: first.folder, files: [first.name]}]});
+      return new Response(new ReadableStream({start(controller) {
+        if (prefixBytes) controller.enqueue(original.subarray(0, prefixBytes));
+        setTimeout(() => controller.error(new TypeError('private upstream connection detail')), 10);
+      }}), {headers: {'Content-Type': 'image/jpeg'}});
+    }});
+    const {base, post} = await bridge(t, adapter); await post('connect', {mode: 'camera'});
+    const list = await (await fetch(base + '/api/photos')).json();
+    const response = await fetch(base + list.photos[0].originalUrl);
+    assert.equal(response.status, 503);
+    const failure = await response.json(); assert.equal(failure.code, 'CAMERA_UNREACHABLE');
+    assert.doesNotMatch(JSON.stringify(failure), /private upstream/);
+  });
+}
+test('camera body timeout after successful headers is reported as CAMERA_TIMEOUT before JPEG publication', async t => {
+  const adapter = new CameraAdapter({streamTimeout: 20, fetchImpl: async (url, options) => {
+    if (url.endsWith('/props')) return data({model: 'RICOH GR III'});
+    if (url.endsWith('/photos')) return data({dirs: [{name: first.folder, files: [first.name]}]});
+    return new Response(new ReadableStream({start(controller) {
+      options.signal.addEventListener('abort', () => controller.error(options.signal.reason), {once: true});
+    }}), {headers: {'Content-Type': 'image/jpeg'}});
+  }});
+  const {base, post} = await bridge(t, adapter); await post('connect', {mode: 'camera'});
+  const list = await (await fetch(base + '/api/photos')).json();
+  const response = await fetch(base + list.photos[0].originalUrl);
+  assert.equal(response.status, 504); assert.equal((await response.json()).code, 'CAMERA_TIMEOUT');
+});
