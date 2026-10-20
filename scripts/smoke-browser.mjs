@@ -58,6 +58,7 @@ try {
   record('demo has twelve synthetic cards', await page.locator('.photo-card').count() === 12);
   record('secondary controls collapsed', await page.locator('.filter-options').getAttribute('open') === null && await page.locator('.card-diagnostics').getAttribute('open') === null);
   await page.locator('.photo-image-button img').first().evaluate(image => image.decode());
+  record('gallery gives photographs above-fold space', await page.locator('.photo-image-button').first().evaluate(image => image.getBoundingClientRect().bottom < innerHeight - 60));
   await noOverflow(); await screenshot('03-desktop-photos');
   await page.locator('#density-compact').click();
   record('compact contact sheet changes layout without fetching originals', await page.locator('#density-compact').getAttribute('aria-pressed') === 'true' && await page.locator('.queue-item').count() === 0);
@@ -152,15 +153,38 @@ try {
   await page.unroute('**/api/photos/*/original?*', held);
   await page.locator('#retry-unfinished').click(); await page.locator('.queue-item[data-state="ready"]').waitFor();
   record('explicit retry recovers original', true);
+  await page.locator('#queue-panel').scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => document.body.classList.contains('viewing-transfer-desk'));
+  record('mobile desk does not overlay its controls with redundant fixed navigation', !await page.locator('#mobile-selection').isVisible());
   await screenshot('07-mobile-ready');
+  await page.locator('#back-to-photos').click();
+  await page.waitForFunction(() => !document.body.classList.contains('viewing-transfer-desk'));
+  record('returning to photos restores mobile transfer navigation', await page.locator('#mobile-selection').isVisible());
   page.once('dialog', dialog => dialog.dismiss()); await page.locator('#clear-queue').click();
   record('declining discard keeps original', await page.locator('.queue-item[data-state="ready"]').count() === 1);
   page.once('dialog', dialog => dialog.accept()); await page.locator('#clear-queue').click();
   record('confirmed discard removes temporary original', await page.locator('.queue-item').count() === 0);
+  await page.locator('#select-visible').click();
+  await page.locator('#queue-filter').selectOption('all');
+  let interruptedReads = 0;
+  const interrupted = async route => {
+    if (++interruptedReads === 2) return route.fulfill({ status: 504, contentType: 'application/json', body: JSON.stringify({ code: 'CAMERA_TIMEOUT' }) });
+    return route.continue();
+  };
+  await page.route('**/api/photos/*/original?*', interrupted);
+  await page.locator('#mobile-transfer').click();
+  await page.locator('#resume-queue').waitFor({ state: 'visible' });
+  record('connection failure preserves one original and pauses ten unstarted reads', interruptedReads === 2 && await page.locator('.queue-item[data-state="ready"]').count() === 1 && await page.locator('.queue-item[data-state="failed"]').count() === 1 && await page.locator('.queue-item[data-state="queued"]').count() === 10);
+  record('retry explicitly includes remaining batch', (await page.locator('#retry-unfinished').innerText()).includes('重试并继续（11）'));
+  await screenshot('10-network-interruption');
+  await page.locator('#retry-unfinished').click();
+  await page.waitForFunction(() => document.querySelectorAll('.queue-item[data-state="ready"]').length === 12);
+  record('network recovery retries only failed and unstarted originals', interruptedReads === 13);
+  await page.unroute('**/api/photos/*/original?*', interrupted);
   record('no uncaught browser errors', errors.length === 0);
   record('no external requests', unexpectedRequests.length === 0);
   record('camera only attempted explicitly through synthetic adapter', cameraAttempts === 1);
-  await writeFile(resolve(output, 'verification.json'), JSON.stringify({ status: 'passed', checks, cameraHardwareTested: false, browser: await browser.version(), screenshots: 9 }, null, 2));
+  await writeFile(resolve(output, 'verification.json'), JSON.stringify({ status: 'passed', checks, cameraHardwareTested: false, browser: await browser.version(), screenshots: 10 }, null, 2));
   console.log(`PASS ${checks.length} real Chromium checks; synthetic fixtures only`);
 } catch (error) {
   await writeFile(resolve(output, 'verification.json'), JSON.stringify({ status: 'failed', checks, errors, unexpectedRequests, error: error.message }, null, 2));

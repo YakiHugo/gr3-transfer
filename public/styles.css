@@ -47,7 +47,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .topbar .status-pill.camera { background: #354336; color: #def0cf; border-color: #64775c; }
 .topbar .text-button:hover { color: #edaa88; }
 main { max-width: 1384px; padding-inline: 32px; }
-.journey { display: flex; list-style: none; padding: 23px 0; margin: 0; gap: 42px; border-bottom: 1px solid var(--line); }
+.journey { display: flex; list-style: none; padding: 16px 0; margin: 0; gap: 42px; border-bottom: 1px solid var(--line); }
 .journey li { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 12px; }
 .journey li > span { font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: 1px; }
 .journey [aria-current] { color: var(--accent); font-weight: 650; }
@@ -71,11 +71,14 @@ main { max-width: 1384px; padding-inline: 32px; }
 .viewfinder-mark { font-size: 52px; font-weight: 800; line-height: 1; letter-spacing: -5px; color: #2b332a; border: 1px solid var(--line); padding: 18px 24px 18px 18px; }
 .connection-guide li > span { border-radius: 3px; background: #eeede5; font-family: ui-monospace, monospace; }
 .connection-guide h3 { font-size: 15px; }
-.workspace { padding-top: 30px; }
-.workspace-heading h1 { font-size: 36px; letter-spacing: -1px; margin-top: 8px; }
-.demo-banner { border-radius: 4px; background: #f9efdc; }
-.workflow-card { display: flex; justify-content: space-between; gap: 24px; align-items: center; padding: 20px 24px; margin-bottom: 26px; border: 1px solid #cdd2c4; border-left: 4px solid var(--accent); background: var(--card); border-radius: 5px; }
-.workflow-card h2 { font-size: 19px; margin: 4px 0; line-height: 1.5; }
+.workspace { padding-top: 22px; }
+.workspace-heading { margin-bottom: 16px; }
+.workspace-heading h1 { font-size: 30px; letter-spacing: -.8px; margin: 4px 0 6px; }
+.workspace-heading p:last-child { font-size: 12px; }
+.demo-banner { border-radius: 4px; background: #f9efdc; padding-block: 4px; margin-bottom: 16px; }
+.workflow-card { display: flex; justify-content: space-between; gap: 24px; align-items: center; padding: 12px 18px; margin-bottom: 18px; border: 1px solid #cdd2c4; border-left: 4px solid var(--accent); background: var(--card); border-radius: 5px; }
+.workflow-card .eyebrow { display: none; }
+.workflow-card h2 { font-size: 17px; margin: 0 0 3px; line-height: 1.5; }
 .workflow-card p:last-child { font-size: 12px; color: var(--muted); margin: 0; }
 .workflow-card > div { min-width: 0; }
 .work-layout { grid-template-columns: minmax(0, 1fr) 282px; gap: 30px; align-items: start; }
@@ -96,15 +99,15 @@ main { max-width: 1384px; padding-inline: 32px; }
 .search-field, .filter-options summary { border-radius: 4px; background: var(--card); }
 .search-field:focus-within { outline-color: #b04a2a66; }
 .filter-options > div { border-radius: 5px; background: var(--card); }
-.gallery-viewbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 15px; }
+.gallery-viewbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
 .gallery-viewbar p { margin: 0; font-size: 11px; color: var(--muted); }
 .density-switch { display: flex; border: 1px solid var(--line); border-radius: 4px; padding: 2px; background: #e8e9df; flex-shrink: 0; }
 .density-switch button { border: 0; background: none; font-size: 11px; min-height: 32px; padding: 4px 12px; border-radius: 2px; }
 .density-switch [aria-pressed="true"] { background: var(--card); box-shadow: 0 1px 3px #252a271a; }
-.gallery-subbar { border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+.gallery-subbar { border-bottom: 1px solid var(--line); margin-bottom: 4px; padding-top: 4px; }
 .gallery-subbar > div { gap: 12px; }
 .gallery-subbar .text-button { font-size: 12px; }
-.selection-review { margin-bottom: 18px; font-size: 11px; }
+.selection-review { margin-bottom: 12px; font-size: 11px; }
 .gallery { gap: 20px 15px; }
 .gallery.compact-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .photo-card { border: 1px solid #d8dcd0; border-radius: 4px; background: var(--card); padding: 7px; }
@@ -186,7 +189,7 @@ main { max-width: 1384px; padding-inline: 32px; }
   .guide-heading { margin-bottom: 20px; padding-bottom: 20px; }
   .viewfinder-mark { font-size: 38px; padding: 14px 18px 14px 12px; }
   .workspace-heading h1 { font-size: 29px; }
-  .workflow-card { padding: 15px; gap: 13px; flex-wrap: wrap; margin-bottom: 22px; }
+  .workflow-card { padding: 12px 14px; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
   .workflow-card h2 { font-size: 17px; }
   .workflow-card .button { width: 100%; min-height: 40px; font-size: 12px; }
   .work-layout { display: flex; }
@@ -227,6 +230,7 @@ main { max-width: 1384px; padding-inline: 32px; }
   .queue-item-top .button { padding: 7px 8px; font-size: 11px; }
   .queue-recovery { flex-direction: column; align-items: stretch; gap: 9px; padding: 12px; }
   .queue-list { max-height: none; overflow: visible; }
+  .viewing-transfer-desk .mobile-selection { display: none; }
   .mobile-selection { background: #fffefbf5; padding-inline: 20px; }
   .mobile-selection strong { font: 26px ui-monospace, SFMono-Regular, Consolas, monospace; }
   .mobile-selection span { font-size: 12px; }

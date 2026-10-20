@@ -33,7 +33,7 @@ npm start
 
 「先试试看」可体验 12 张生成的示例图片，不会连接相机。「筛选与排序」「存储卡与格式信息」和「文件校验」默认收起，需要时再展开。
 
-搜索支持文件夹与文件名的多个关键词；可反选本页、隐藏已入队照片，或点「选择下一批」按剩余空间选片，确认后再传输。未知大小按每张 128 MiB 保守预留。传输时可等待当前原片完成后暂停，再继续或取消未开始项目。
+搜索支持文件夹与文件名的多个关键词；可反选本页、隐藏已入队照片，或点「选择下一批」按剩余空间选片，确认后再传输。未知大小按每张 128 MiB 保守预留。传输时可等待当前原片完成后暂停，再继续或取消未开始项目。连接失败会自动暂停尚未开始的照片，避免连续超时；「重试并继续」只重试失败项和剩余照片，保留已完成原片。
 
 传输记录可按待保存、失败、已交给浏览器等状态筛选。批次校验清单只包含文件名、大小和 SHA-256，不含照片；ZIP 和清单始终包含全部已完成原片，不受记录筛选影响。清理已交给浏览器的照片前，必须自己确认下载文件夹中的副本。
 
@@ -80,7 +80,7 @@ npm start
 
 ```sh
 npm ci --ignore-scripts
-npm run check                         # 协议、原片字节、DOM、发布契约：160 项
+npm run check                         # 协议、原片字节、DOM、发布契约：175 项
 node scripts/benchmark-gallery.mjs    # 50,000 张合成照片的筛选与排序
 android/scripts/test-core.sh          # 无 SDK 的 Android 核心契约
 node android/scripts/audit-source.mjs # 网络与存储安全静态检查
@@ -93,6 +93,6 @@ npx playwright install chromium
 npm run test:browser
 ```
 
-「Verify Chinese browser UI」工作流保留截图与 `verification.json`。当前本地沙箱限制 Chromium 启动，**未把本地 DOM 检查计作浏览器视觉通过**；须查看该提交对应的 CI 结果。测试不会访问真实相机地址。
+「Verify Chinese browser UI」工作流保留截图与 `verification.json`。当前执行环境不可用，**未把本地 DOM 检查计作浏览器视觉通过**；须查看该提交对应的 CI 结果。测试不会访问真实相机地址。
 
 更多资料：[产品参考与开源传输评估](docs/product-transport-audit.md) · [验证范围与硬件清单](docs/verification.md) · [协议、字节保证与完整技术说明](docs/technical-design.md) · [中断恢复](docs/batch-recovery.md)

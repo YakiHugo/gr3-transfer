@@ -554,7 +554,8 @@ test('DOM: synthetic camera-protocol interruption recovers only missing original
   await until(() => !h.$('#workspace').hidden && !h.$('#disconnect').disabled);
   assert.match(h.$('#connection-badge').textContent, /已连接.*待实机验证/);
   h.click('#select-visible'); h.click('#transfer');
-  await until(() => h.all('.queue-item[data-state="ready"]').length === 2 && !h.$('#retry-unfinished').disabled);
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 1 && h.all('.queue-item[data-state="queued"]').length === 1 && !h.$('#retry-unfinished').disabled);
+  assert.equal(reads.has(photos[2].id), false, 'network failure pauses originals not yet started');
   assert.match(h.$('#recovery-note').textContent, /先恢复相机 Wi-Fi/);
   h.click('#retry-unfinished'); await until(() => h.all('.queue-item[data-state="ready"]').length === 3 && !h.$('#build-archive').disabled);
   assert.equal(reads.get(photos[0].id), 1); assert.equal(reads.get(photos[1].id), 2); assert.equal(reads.get(photos[2].id), 1);
@@ -1201,6 +1202,8 @@ test('DOM: a connection failure pauses unstarted originals and explicit retry pr
   await h.demo(); h.click('#select-visible'); h.click('#transfer');
   await until(() => h.all('.queue-item[data-state="failed"]').length === 1 && !h.$('#resume-queue').hidden);
   assert.equal(reads, 2);
+  assert.equal(h.$('#retry-unfinished').textContent, '重试并继续（11）');
+  assert.match(h.$('#recovery-note').textContent, /随后继续 10 张/);
   assert.equal(h.all('.queue-item[data-state="ready"]').length, 1);
   assert.equal(h.all('.queue-item[data-state="queued"]').length, 10);
   assert.match(h.$('#notice-text').textContent, /连接中断，已暂停后续传输/);
@@ -1220,4 +1223,18 @@ test('DOM: isolated invalid photo response does not block unrelated remaining or
   await until(() => h.all('.queue-item[data-state="ready"]').length === 11 && !h.$('#retry-unfinished').disabled);
   assert.equal(reads, 12); assert.equal(h.all('.queue-item[data-state="failed"]').length, 1);
   assert.equal(h.all('.queue-item[data-state="queued"]').length, 0);
+});
+
+test('DOM: retrying one failed row does not resume a paused batch without consent', async t => {
+  let reads = 0;
+  const h = await harness(t, {intercept: async url => {
+    if (url.pathname.endsWith('/original') && ++reads === 2) return Response.json({code: 'CAMERA_TIMEOUT'}, {status: 504});
+  }});
+  await h.demo(); h.click('#select-visible'); h.click('#transfer');
+  await until(() => h.all('.queue-item[data-state="failed"]').length === 1 && !h.$('#resume-queue').hidden);
+  h.click('.queue-item[data-state="failed"] .queue-item-top button');
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 2 && !h.$('#resume-queue').hidden);
+  assert.equal(reads, 3); assert.equal(h.all('.queue-item[data-state="queued"]').length, 10);
+  h.click('#resume-queue'); await until(() => h.all('.queue-item[data-state="ready"]').length === 12);
+  assert.equal(reads, 13);
 });

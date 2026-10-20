@@ -445,7 +445,7 @@ function renderWorkflow() {
     description = stopped ? `另有 ${stopped} 张未完成。先保存已收到的原片，再处理重试。` : '原片已在本页暂存，还没有保存到电脑。请下载后检查文件。';
     action = 'ready'; label = '去保存原片';
   } else if (waiting) {
-    title = stopped ? '连接中断，已暂停后续传输' : '这一批已暂停'; description = `还有 ${waiting} 张等待传输。${stopped ? `另有 ${stopped} 张未完成，可单独重试。` : '已收到的原片仍会保留。'}`;
+    title = '这一批已暂停'; description = `还有 ${waiting} 张等待传输。${stopped ? `另有 ${stopped} 张未完成，可重试并继续这一批。` : '已收到的原片仍会保留。'}`;
     action = 'waiting'; label = '查看待传输';
   } else if (stopped) {
     title = `${stopped} 张照片未完成`; description = '已完成原片会保留。检查相机 Wi-Fi 后，只重试未完成项。';
@@ -478,7 +478,21 @@ function renderWorkflow() {
   $('mobile-selection-count').textContent = mobileQueue ? String(state.running ? received : unsaved || received || state.queue.length) : String(state.selected.size);
   $('mobile-selection-label').textContent = mobileQueue ? unsaved ? ' 张待保存' : state.running ? ' 张已接收' : ' 项传输记录' : ' 张已选';
   $('mobile-show-transfers').textContent = unsaved && !state.running ? '去保存原片' : '查看传输';
+  updateMobileDock();
 }
+function updateMobileDock() {
+  const rect = $('queue-panel').getBoundingClientRect();
+  // The desk already exposes save/pause/retry. Avoid covering those controls
+  // with a redundant fixed navigation bar, particularly on short screens.
+  document.body.classList.toggle('viewing-transfer-desk', !$('queue-panel').hidden && rect.top < window.innerHeight * .65 && rect.bottom > 80);
+}
+let dockFrame = 0;
+function scheduleMobileDock() {
+  if (dockFrame) return;
+  dockFrame = requestAnimationFrame(() => { dockFrame = 0; updateMobileDock(); });
+}
+window.addEventListener('scroll', scheduleMobileDock, { passive: true });
+window.addEventListener('resize', scheduleMobileDock);
 function showTransfers(filter = 'all') {
   if (!state.queue.length) return;
   $('queue-filter').value = filter;
@@ -891,11 +905,13 @@ function renderRecovery() {
   const eligible = stopped.filter(canRetry);
   $('queue-recovery').hidden = !stopped.length || state.running;
   $('retry-unfinished').hidden = !eligible.length;
-  $('retry-unfinished').textContent = `重试未完成项（${eligible.length}）`;
+  const waiting = state.queue.filter(entry => entry.status === 'queued' && currentSource(entry)).length;
+  $('retry-unfinished').textContent = waiting ? `重试并继续（${eligible.length + waiting}）` : `重试未完成项（${eligible.length}）`;
   const notes = [];
   if (eligible.length) {
     if (state.session?.mode === 'camera') notes.push('请先恢复相机 Wi-Fi。');
     notes.push('从头重试本次连接中失败或取消的文件，已完成原片会保留。');
+    if (waiting) notes.push(`随后继续 ${waiting} 张尚未开始的照片。`);
   }
   const stale = stopped.filter(entry => !currentSource(entry)).length;
   const expired = stopped.filter(entry => currentSource(entry) && entry.retryable === false).length;
@@ -914,8 +930,9 @@ function retryEntries(entries) {
     entry.status = 'queued'; entry.error = ''; entry.received = 0;
     entry.expected = knownSize(entry.photo.bytes) ? entry.photo.bytes : null;
   });
-  // runQueue invalidates any partial ZIP and sets the running guard synchronously.
-  runQueue();
+  // Batch retry explicitly continues waiting entries; a row retry affects only
+  // that row. runQueue invalidates partial ZIPs and guards synchronously.
+  runQueue(entries === state.queue ? null : eligible);
 }
 function updateEntryProgress(entry) {
   const row = $(`queue-${entry.id}`);
@@ -991,7 +1008,7 @@ async function transferEntry(entry, signal, generation) {
     entry.error = entry.status === 'failed' ? `${userError(error) || '连接中断，未生成文件。'}${entry.attempts >= MAX_ATTEMPTS ? ' 已达到重试上限，请检查连接后移除并重新选择。' : ''}` : '';
   } finally { clearInterval(progressTimer); if (reader) { try { reader.releaseLock(); } catch { /* Reader already released. */ } } }
 }
-async function runQueue() {
+async function runQueue(onlyEntries = null) {
   if (state.running || state.busy || state.exporting || state.verifying) return;
   // A retry can add a ready file to a previously packaged partial batch.
   invalidateArchive();
@@ -1002,6 +1019,7 @@ async function runQueue() {
   renderQueue();
   try {
     for (const entry of state.queue) {
+      if (onlyEntries && !onlyEntries.includes(entry)) continue;
       if (signal.aborted || state.pauseRequested || generation !== state.generation) break;
       if (!currentSource(entry)) { if (entry.status === 'queued') entry.status = 'cancelled'; continue; }
       if (entry.status === 'queued') {
@@ -1016,7 +1034,7 @@ async function runQueue() {
     }
   } finally {
     if (generation === state.generation) {
-      if (!state.pauseRequested || signal.aborted) state.queue.filter(entry => entry.status === 'queued').forEach(entry => { entry.status = 'cancelled'; });
+      if (!state.pauseRequested || signal.aborted) state.queue.filter(entry => entry.status === 'queued' && (!onlyEntries || onlyEntries.includes(entry))).forEach(entry => { entry.status = 'cancelled'; });
       state.pauseRequested = false;
       state.running = false; state.controller = null; renderQueue();
     }
