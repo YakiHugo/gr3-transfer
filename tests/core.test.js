@@ -323,3 +323,35 @@ test('a rejected foreground read releases the queue and pre-aborted work never e
   await assert.rejects(queue.run(() => { throw new Error('synthetic failure'); }, undefined, 2), /synthetic failure/);
   assert.equal(await queue.run(() => 'next'), 'next');
 });
+
+for (const prefixBytes of [0, 2]) {
+  test(`camera body error after headers and ${prefixBytes} JPEG prefix bytes preserves network error classification`, async t => {
+    const adapter = new CameraAdapter({ fetchImpl: async url => {
+      if (url.endsWith('/props')) return data({model: 'RICOH GR III'});
+      if (url.endsWith('/photos')) return data({dirs: [{name: first.folder, files: [first.name]}]});
+      return new Response(new ReadableStream({start(controller) {
+        if (prefixBytes) controller.enqueue(original.subarray(0, prefixBytes));
+        setTimeout(() => controller.error(new TypeError('private upstream connection detail')), 10);
+      }}), {headers: {'Content-Type': 'image/jpeg'}});
+    }});
+    const {base, post} = await bridge(t, adapter); await post('connect', {mode: 'camera'});
+    const list = await (await fetch(base + '/api/photos')).json();
+    const response = await fetch(base + list.photos[0].originalUrl);
+    assert.equal(response.status, 503);
+    const failure = await response.json(); assert.equal(failure.code, 'CAMERA_UNREACHABLE');
+    assert.doesNotMatch(JSON.stringify(failure), /private upstream/);
+  });
+}
+test('camera body timeout after successful headers is reported as CAMERA_TIMEOUT before JPEG publication', async t => {
+  const adapter = new CameraAdapter({streamTimeout: 20, fetchImpl: async (url, options) => {
+    if (url.endsWith('/props')) return data({model: 'RICOH GR III'});
+    if (url.endsWith('/photos')) return data({dirs: [{name: first.folder, files: [first.name]}]});
+    return new Response(new ReadableStream({start(controller) {
+      options.signal.addEventListener('abort', () => controller.error(options.signal.reason), {once: true});
+    }}), {headers: {'Content-Type': 'image/jpeg'}});
+  }});
+  const {base, post} = await bridge(t, adapter); await post('connect', {mode: 'camera'});
+  const list = await (await fetch(base + '/api/photos')).json();
+  const response = await fetch(base + list.photos[0].originalUrl);
+  assert.equal(response.status, 504); assert.equal((await response.json()).code, 'CAMERA_TIMEOUT');
+});

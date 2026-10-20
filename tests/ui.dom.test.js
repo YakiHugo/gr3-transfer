@@ -555,7 +555,7 @@ test('DOM: synthetic camera-protocol interruption recovers only missing original
   assert.match(h.$('#connection-badge').textContent, /已连接.*待实机验证/);
   h.click('#select-visible'); h.click('#transfer');
   await until(() => h.all('.queue-item[data-state="ready"]').length === 1 && h.all('.queue-item[data-state="queued"]').length === 1 && !h.$('#retry-unfinished').disabled);
-  assert.equal(reads.has(photos[2].id), false, 'network failure pauses originals not yet started');
+  assert.equal(reads.has(photos[0].id), false, 'network failure pauses originals not yet started');
   assert.match(h.$('#recovery-note').textContent, /先恢复相机 Wi-Fi/);
   h.click('#retry-unfinished'); await until(() => h.all('.queue-item[data-state="ready"]').length === 3 && !h.$('#build-archive').disabled);
   assert.equal(reads.get(photos[0].id), 1); assert.equal(reads.get(photos[1].id), 2); assert.equal(reads.get(photos[2].id), 1);
@@ -1237,4 +1237,41 @@ test('DOM: retrying one failed row does not resume a paused batch without consen
   assert.equal(reads, 3); assert.equal(h.all('.queue-item[data-state="queued"]').length, 10);
   h.click('#resume-queue'); await until(() => h.all('.queue-item[data-state="ready"]').length === 12);
   assert.equal(reads, 13);
+});
+
+test('DOM: upstream body timeout after headers pauses the batch and retries only missing originals', async t => {
+  const photos = manifest.slice(0, 3), reads = new Map();
+  const adapter = new CameraAdapter({streamTimeout: 20, fetchImpl: async (input, options) => {
+    const url = new URL(input);
+    if (url.pathname === '/v1/props') return Response.json({model: 'RICOH GR III'});
+    if (url.pathname === '/v1/photos') return Response.json({dirs: [{name: '100RICOH', files: photos.map(photo => photo.name)}]});
+    const photo = photos.find(photo => url.pathname === `/v1/photos/${photo.folder}/${photo.name}`);
+    assert.ok(photo); assert.equal(url.search, '');
+    const count = (reads.get(photo.id) || 0) + 1; reads.set(photo.id, count);
+    if (photo.id === photos[1].id && count === 1) {
+      return new Response(new ReadableStream({start(controller) {
+        controller.enqueue(original.subarray(0, 2));
+        options.signal.addEventListener('abort', () => controller.error(options.signal.reason), {once: true});
+      }}), {headers: {'Content-Type': 'image/jpeg'}});
+    }
+    const payload = await readFile(new URL('../fixtures/' + photo.id + '.jpg', import.meta.url));
+    return new Response(payload, {headers: {'Content-Type': 'image/jpeg'}});
+  }});
+  const h = await harness(t, {adapter}); h.click('#landing-connect'); h.click('#confirm-connect');
+  await until(() => !h.$('#workspace').hidden && !h.$('#disconnect').disabled);
+  h.click('#select-visible'); h.click('#transfer');
+  await until(() => !h.$('#resume-queue').hidden);
+  assert.equal(h.all('.queue-item[data-state="ready"]').length, 1);
+  assert.equal(h.all('.queue-item[data-state="failed"]').length, 1);
+  assert.equal(h.all('.queue-item[data-state="queued"]').length, 1);
+  assert.equal(reads.has(photos[0].id), false);
+  assert.match(h.$('.queue-item[data-state="failed"]').textContent, /超时/);
+  h.click('#retry-unfinished');
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 3);
+  assert.equal(reads.get(photos[0].id), 1); assert.equal(reads.get(photos[1].id), 2); assert.equal(reads.get(photos[2].id), 1);
+  for (const save of h.all('.queue-item-top button')) save.click();
+  for (const saved of h.saved) {
+    const photo = photos.find(photo => saved.filename.endsWith(photo.folder + '__' + photo.name));
+    assert.deepEqual(Buffer.from(await saved.blob.arrayBuffer()), await readFile(new URL('../fixtures/' + photo.id + '.jpg', import.meta.url)));
+  }
 });

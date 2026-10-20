@@ -80,7 +80,7 @@ npm start
 
 ```sh
 npm ci --ignore-scripts
-npm run check                         # 协议、原片字节、DOM、发布契约：175 项
+npm run check                         # 协议、原片字节、DOM、发布契约：179 项
 node scripts/benchmark-gallery.mjs    # 50,000 张合成照片的筛选与排序
 android/scripts/test-core.sh          # 无 SDK 的 Android 核心契约
 node android/scripts/audit-source.mjs # 网络与存储安全静态检查

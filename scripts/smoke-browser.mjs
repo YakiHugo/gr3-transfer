@@ -165,7 +165,6 @@ try {
   page.once('dialog', dialog => dialog.accept()); await page.locator('#clear-queue').click();
   record('confirmed discard removes temporary original', await page.locator('.queue-item').count() === 0);
   await page.locator('#select-visible').click();
-  await page.locator('#queue-filter').selectOption('all');
   let interruptedReads = 0;
   const interrupted = async route => {
     if (++interruptedReads === 2) return route.fulfill({ status: 504, contentType: 'application/json', body: JSON.stringify({ code: 'CAMERA_TIMEOUT' }) });

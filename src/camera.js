@@ -210,7 +210,16 @@ export class CameraAdapter {
     const path = `/photos/${encodeURIComponent(photo.folder)}/${encodeURIComponent(photo.name)}${variant === 'thumbnail' ? '?size=thumb' : variant === 'preview' ? '?size=view' : ''}`;
     return this.queue.run(async () => {
       const response = await this.request(path, signal, this.streamTimeout);
-      return consume(response);
+      try {
+        // Fetch resolves at headers, but the body can still time out or lose
+        // the camera before pipeJpeg sends a JPEG prefix to the browser.
+        return await consume(response);
+      } catch (error) {
+        if (error instanceof AppError) throw error;
+        if (signal?.aborted) throw new AppError('This operation was cancelled.', 'CANCELLED', 409);
+        if (error?.name === 'TimeoutError') throw new AppError('The camera response timed out. Keep it awake and retry.', 'CAMERA_TIMEOUT', 504);
+        throw new AppError('The camera connection ended while reading the photo. Keep it awake and retry.', 'CAMERA_UNREACHABLE', 503);
+      }
     }, signal, variant === 'original' ? 2 : variant === 'preview' ? 1 : 0);
   }
 }
