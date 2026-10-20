@@ -26,7 +26,18 @@ await context.route('**/*', route => {
   return route.continue();
 });
 const record = (label, condition = true) => { assert.ok(condition, label); checks.push(label); };
-const screenshot = async name => { await page.screenshot({ path: resolve(output, `${name}.png`), fullPage: true }); };
+const screenshot = async name => {
+  await page.screenshot({ path: resolve(output, `${name}.png`), fullPage: true });
+  // Bounded synthetic-only review frames allow visual inspection when the
+  // reviewing environment cannot unzip the full-resolution artifact.
+  if (['01-desktop-connect', '03-desktop-photos', '09-selection-review', '07-mobile-ready'].includes(name)) {
+    const target = name === '07-mobile-ready' ? page.locator('#queue-panel') : page;
+    let frame = await target.screenshot({ type: 'jpeg', quality: 60 });
+    if (frame.length > 180000) frame = await target.screenshot({ type: 'jpeg', quality: 35 });
+    assert.ok(frame.length <= 180000, 'bounded review frame');
+    console.log('GR_REVIEW_FRAME ' + name + ' ' + frame.toString('base64'));
+  }
+};
 const settled = async () => page.locator('#try-demo:not([disabled])').waitFor();
 const noOverflow = async () => record('viewport has no horizontal overflow', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
 try {

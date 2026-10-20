@@ -105,7 +105,8 @@ test('DOM: sequential selected downloads, repeat-click deduplication and clear r
   h.click('#select-visible'); h.click('#transfer');
   await until(() => h.all('.queue-item[data-state="ready"]').length === 6);
   assert.equal(h.blobs.size, 6); h.click('#transfer'); assert.equal(h.all('.queue-item').length, 6);
-  assert.match(h.$('#notice-text').textContent, /已在传输记录中/);
+  assert.equal(h.$('#transfer').disabled, true);
+  assert.match(h.$('#transfer-plan').textContent, /跳过 6 张已在列表/);
   h.click('#clear-queue'); assert.equal(h.blobs.size, 0); assert.equal(h.$('#queue-panel').hidden, true);
 });
 
@@ -170,7 +171,7 @@ test('DOM: large list paginates 24 frames, keeps cross-page selections and displ
   await h.demo(); assert.equal(h.all('.photo-card').length, 24); h.click('#select-visible');
   h.click('#pagination button:last-child'); assert.equal(h.all('.photo-card').length, 24); h.click('#select-visible'); assert.equal(h.$('#selection-count').textContent, '48');
   h.click('#pagination button:last-child'); assert.equal(h.all('.photo-card').length, 2); h.click('#select-visible'); h.click('#transfer');
-  assert.match(h.$('#notice-text').textContent, /保留 48/); assert.equal(h.blobs.size, 0);
+  assert.equal(h.$('#transfer').disabled, true); assert.match(h.$('#transfer-plan').textContent, /保留 48/); assert.equal(h.blobs.size, 0);
   h.change('#search', '<img', 'input'); assert.equal(h.all('.photo-card').length, 1); assert.equal(h.$('.photo-meta img'), null);
   assert.equal(h.$('.photo-meta h3').textContent, '<img src=x onerror=alert(1)>.JPG');
 });
@@ -743,7 +744,7 @@ test('DOM: transfer preflight blocks known over-budget batches before requesting
     await h.demo(); h.click('#select-visible');
     assert.equal(h.$('#transfer-plan').classList.contains('blocked'), true);
     h.click('#transfer');
-    assert.match(h.$('#notice-text').textContent, /超过/);
+    assert.equal(h.$('#transfer').disabled, true); assert.match(h.$('#transfer-plan').textContent, /超过/);
     assert.equal(h.requests.some(path => path.endsWith('/original')), false);
     assert.equal(h.all('.queue-item').length, 0);
   }
@@ -1151,4 +1152,72 @@ test('DOM: camera-returned battery is explicit and absent in demo without extra 
   assert.equal(h.$('#source-battery').hidden, false);
   h.click('#disconnect'); await until(() => !h.$('#try-demo').disabled); await h.demo();
   assert.equal(h.$('#source-battery').hidden, true);
+});
+
+test('DOM: review of a removed selection is empty and keyboard focus remains on a usable action', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#review-selection');
+  h.click('.selection-review-item button');
+  assert.equal(h.$('#selection-count').textContent, '0');
+  assert.equal(h.$('#selection-review-empty').hidden, false);
+  assert.equal(h.$('#review-transfer').disabled, true);
+  assert.equal(h.window.document.activeElement, h.$('#review-back'));
+  assert.equal(h.all('.queue-item').length, 0);
+});
+
+test('DOM: refresh reconciles an open review and disconnect closes it without stale actions', async t => {
+  let photos = [{id: 'one', folder: '100RICOH', name: 'ONE.JPG', bytes: 100}, {id: 'two', folder: '100RICOH', name: 'TWO.JPG', bytes: 100}];
+  const adapter = {connect: async () => ({properties: {model: 'RICOH GR III'}, photos}), list: async () => photos};
+  const h = await harness(t, {adapter}); h.click('#landing-connect'); h.click('#confirm-connect');
+  await until(() => h.all('.photo-card').length === 2 && !h.$('#refresh').disabled);
+  h.click('#select-visible'); h.click('#review-selection');
+  const oldRemove = h.$('.selection-review-item button');
+  photos = [photos[1]]; h.click('#refresh');
+  await until(() => h.all('.selection-review-item').length === 1 && !h.$('#refresh').disabled);
+  assert.equal(h.$('#selection-count').textContent, '1');
+  oldRemove.click(); assert.equal(h.$('#selection-count').textContent, '1');
+  h.click('#disconnect'); await until(() => !h.$('#landing').hidden && !h.$('#try-demo').disabled);
+  assert.equal(h.$('#selection-dialog').open, false);
+  assert.equal(h.$('#review-transfer').disabled, true);
+  assert.equal(h.window.document.body.classList.contains('has-modal'), false);
+});
+
+test('DOM: source replacement and history suspension dismiss review without starting originals', async t => {
+  const h = await harness(t); await h.demo(); h.click('.photo-select input'); h.click('#review-selection');
+  const oldRemove = h.$('.selection-review-item button');
+  h.click('#try-demo'); await until(() => !h.$('#try-demo').disabled);
+  assert.equal(h.$('#selection-dialog').open, false); assert.equal(h.$('#selection-count').textContent, '0');
+  oldRemove.click(); assert.equal(h.$('#selection-count').textContent, '0');
+  h.click('.photo-select input'); h.click('#review-selection');
+  h.window.dispatchEvent(new h.window.Event('pagehide'));
+  assert.equal(h.$('#selection-dialog').open, false);
+  assert.equal(h.requests.some(path => path.endsWith('/original')), false);
+});
+
+test('DOM: a connection failure pauses unstarted originals and explicit retry preserves completed files', async t => {
+  let reads = 0, failing = true;
+  const h = await harness(t, {intercept: async url => {
+    if (url.pathname.endsWith('/original') && ++reads === 2 && failing) return Response.json({code: 'CAMERA_TIMEOUT'}, {status: 504});
+  }});
+  await h.demo(); h.click('#select-visible'); h.click('#transfer');
+  await until(() => h.all('.queue-item[data-state="failed"]').length === 1 && !h.$('#resume-queue').hidden);
+  assert.equal(reads, 2);
+  assert.equal(h.all('.queue-item[data-state="ready"]').length, 1);
+  assert.equal(h.all('.queue-item[data-state="queued"]').length, 10);
+  assert.match(h.$('#notice-text').textContent, /连接中断，已暂停后续传输/);
+  const retained = [...h.blobs.values()][0]; failing = false;
+  h.click('#retry-unfinished'); h.click('#retry-unfinished');
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 12);
+  assert.equal(reads, 13, 'one initial failure, one retry, no duplicate successful transfers');
+  assert.equal([...h.blobs.values()].includes(retained), true);
+});
+
+test('DOM: isolated invalid photo response does not block unrelated remaining originals', async t => {
+  let reads = 0;
+  const h = await harness(t, {intercept: async url => {
+    if (url.pathname.endsWith('/original') && ++reads === 1) return Response.json({code: 'NOT_JPEG'}, {status: 502});
+  }});
+  await h.demo(); h.click('#select-visible'); h.click('#transfer');
+  await until(() => h.all('.queue-item[data-state="ready"]').length === 11 && !h.$('#retry-unfinished').disabled);
+  assert.equal(reads, 12); assert.equal(h.all('.queue-item[data-state="failed"]').length, 1);
+  assert.equal(h.all('.queue-item[data-state="queued"]').length, 0);
 });

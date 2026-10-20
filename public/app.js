@@ -256,6 +256,7 @@ function showConnectionAdvice(code, stage) {
 }
 async function connect(mode) {
   if (state.busy || state.running || state.exporting || state.verifying) return;
+  closeDialog($('selection-dialog'));
   state.connecting = true;
   setBusy(true);
   const generation = ++state.generation;
@@ -444,8 +445,8 @@ function renderWorkflow() {
     description = stopped ? `另有 ${stopped} 张未完成。先保存已收到的原片，再处理重试。` : '原片已在本页暂存，还没有保存到电脑。请下载后检查文件。';
     action = 'ready'; label = '去保存原片';
   } else if (waiting) {
-    title = '这一批已暂停'; description = `还有 ${waiting} 张等待传输。已收到的原片仍会保留。`;
-    action = 'waiting'; label = '继续这一批';
+    title = stopped ? '连接中断，已暂停后续传输' : '这一批已暂停'; description = `还有 ${waiting} 张等待传输。${stopped ? `另有 ${stopped} 张未完成，可单独重试。` : '已收到的原片仍会保留。'}`;
+    action = 'waiting'; label = '查看待传输';
   } else if (stopped) {
     title = `${stopped} 张照片未完成`; description = '已完成原片会保留。检查相机 Wi-Fi 后，只重试未完成项。';
     action = 'unfinished'; label = '处理未完成项';
@@ -926,7 +927,7 @@ function updateEntryProgress(entry) {
 async function transferEntry(entry, signal, generation) {
   const attempt = ++entry.attempts;
   entry.startedAt = performance.now(); entry.finishedAt = null; entry.archiveHandedOff = false;
-  entry.status = 'transferring'; entry.received = 0; entry.error = ''; entry.retryable = true;
+  entry.status = 'transferring'; entry.received = 0; entry.error = ''; entry.retryable = true; entry.connectionInterrupted = false;
   entry.expected = knownSize(entry.photo.bytes) ? entry.photo.bytes : null;
   renderQueue();
   const progressTimer = setInterval(() => {
@@ -941,6 +942,7 @@ async function transferEntry(entry, signal, generation) {
     response = await fetch(safeLocalUrl(entry.photo.originalUrl), { signal, cache: 'no-store', credentials: 'same-origin' });
     if (!response.ok) {
       const failure = await response.json().catch(() => ({}));
+      entry.connectionInterrupted = ['CAMERA_UNREACHABLE', 'CAMERA_TIMEOUT', 'CAMERA_HTTP_ERROR', 'BRIDGE_ERROR'].includes(failure.code);
       if (['STALE_SESSION', 'PHOTO_NOT_FOUND', 'DISCONNECTED'].includes(failure.code)) entry.retryable = false;
       throw new Error(`${cameraErrorMessage(failure.code, response.status)}${entry.retryable ? '' : ' 请重新连接并选择这张照片，此旧传输无法重试。'}`);
     }
@@ -985,6 +987,7 @@ async function transferEntry(entry, signal, generation) {
     // a ready file produced by a subsequent retry if the disconnect request failed.
     if (generation !== state.generation || attempt !== entry.attempts) return;
     entry.status = signal.aborted || error.name === 'AbortError' ? 'cancelled' : 'failed';
+    if (entry.status === 'failed' && error.name === 'TypeError') entry.connectionInterrupted = true;
     entry.error = entry.status === 'failed' ? `${userError(error) || '连接中断，未生成文件。'}${entry.attempts >= MAX_ATTEMPTS ? ' 已达到重试上限，请检查连接后移除并重新选择。' : ''}` : '';
   } finally { clearInterval(progressTimer); if (reader) { try { reader.releaseLock(); } catch { /* Reader already released. */ } } }
 }
@@ -1004,6 +1007,10 @@ async function runQueue() {
       if (entry.status === 'queued') {
         await transferEntry(entry, signal, generation);
         if (generation !== state.generation) break;
+        if (entry.status === 'failed' && entry.connectionInterrupted && state.queue.some(item => item.status === 'queued' && currentSource(item))) {
+          state.pauseRequested = true;
+          notify('连接中断，已暂停后续传输。已收到的原片会保留；检查连接后可重试未完成项，或继续尚未开始的照片。', true);
+        }
         renderQueue();
       }
     }
